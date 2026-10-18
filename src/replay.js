@@ -132,10 +132,24 @@ export async function click(page, step) {
 // Chromium relayout the page, and Unity then drops or misplaces the next
 // click (seen on the real game: Create ignored, a dialog closed by its own
 // button). Full screenshots between clicks leave input alone.
-// A snapshot may carry its own maxDiff: the Teams box, plain white either way,
-// is 27.6 apart ticked vs unticked (hovered unticked: 10), under the general limit.
+// A snapshot may carry its own limits: the Teams box, plain white either way,
+// is 27.6 apart ticked vs unticked (hovered unticked: 10), under the general
+// maxDiff; the region badge reads IN or SA in letters too small for the general
+// minSimilarity (IN vs SA 0.87-0.90, IN vs IN 1.00).
 export const looksLike = (shot, step, viewport, match) =>
-  patchMatch(cropPng(shot, patchClip(step.x, step.y, viewport)), Buffer.from(step.patch, 'base64'), { ...match, maxDiff: step.maxDiff ?? match.maxDiff });
+  patchMatch(cropPng(shot, patchClip(step.x, step.y, viewport)), Buffer.from(step.patch, 'base64'), {
+    minSimilarity: step.minSimilarity ?? match.minSimilarity,
+    maxDiff: step.maxDiff ?? match.maxDiff,
+  });
+
+// Waits for the main menu (the recording's first step), closing popups and
+// nag screens like the replay does, without clicking anything else.
+export async function waitForMenu(page, rec, { minSimilarity, visualThreshold, timeoutMs, log }) {
+  const match = { minSimilarity, maxDiff: visualThreshold };
+  const r = await waitForPatch(page, rec.steps[0], rec.viewport, match, timeoutMs, () => false, rec.popups ?? [],
+    (popup) => log.warn(`Closing popup "${popup.name}"`), rec.closeButton);
+  if (!r.matched) throw new Error(`The main menu never showed (last ${r.score})`);
+}
 
 // Clicks the close button of the first known popup on screen. Returns true if it did.
 async function closePopup(page, shot, popups, viewport, match, onPopup) {

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { pageHooks, inputRecorder } from './hooks.js';
-import { click, looksLike, replay, withOptions } from './replay.js';
+import { click, looksLike, replay, waitForMenu, withOptions } from './replay.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -188,6 +188,7 @@ export class Host extends EventEmitter {
     return this.#run(async () => {
       if (!this.isAlive() || !this.atMenu) await this.#loadMenu();
       this.atMenu = false;
+      if (rec.region) await this.#ensureRegion(rec);
 
       // A misclick that picks the wrong arena or weapons still yields a link,
       // so every link is checked against the expected settings before use.
@@ -260,6 +261,33 @@ export class Host extends EventEmitter {
       await this.screenshot(`start-fail-${Date.now()}`);
       throw new Error('The round did not start');
     });
+  }
+
+  // The game remembers its region in the browser profile, which a container
+  // loses on every restart. Rooms are made in the region the menu shows, so
+  // switch it to the recorded one (India) when the badge says otherwise.
+  async #ensureRegion(rec) {
+    const { badge, globe, choice, name } = rec.region;
+    const vp = this.cfg.browser.viewport;
+    const r = this.cfg.replay;
+    const match = { minSimilarity: r.minSimilarity, maxDiff: r.visualThreshold };
+    const menuOpts = { ...r, timeoutMs: this.cfg.game.menuTimeoutMs, log: this.log };
+    await waitForMenu(this.page, rec, menuOpts);
+    if (looksLike(await this.page.screenshot(), badge, vp, match).matched) return;
+
+    this.log.warn(`Region is not ${name}; switching it`);
+    await this.page.mouse.move(globe.x, globe.y);
+    await click(this.page, globe);
+    for (const deadline = Date.now() + 15_000; ; await sleep(400)) {
+      if (looksLike(await this.page.screenshot(), choice, vp, match).matched) break;
+      if (Date.now() > deadline) throw new Error('The region picker did not open');
+    }
+    await this.page.mouse.move(choice.x, choice.y);
+    await click(this.page, choice);
+    await sleep(3000); // the game reconnects to the new region
+    await waitForMenu(this.page, rec, menuOpts);
+    if (!looksLike(await this.page.screenshot(), badge, vp, match).matched) throw new Error(`Could not switch the region to ${name}`);
+    this.log.event('region_set', { region: name });
   }
 
   // The game kicks idle players, and the host's kart is one. A short steering

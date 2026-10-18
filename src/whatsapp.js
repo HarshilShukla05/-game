@@ -1,15 +1,14 @@
 import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
 import makeWASocket, {
   Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   isJidGroup,
   normalizeMessageContent,
-  useMultiFileAuthState,
 } from 'baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
+import { openAuthStore } from './authStore.js';
 
 // Commands older than this (e.g. delivered after a reconnect) are ignored, so
 // a backlog of old "@game" messages never spawns a room nobody is waiting for.
@@ -49,7 +48,9 @@ export class WhatsApp extends EventEmitter {
   }
 
   async #connect() {
-    const { state, saveCreds } = await useMultiFileAuthState(this.cfg.authDir);
+    await this.store?.close().catch(() => {});
+    this.store = await openAuthStore(this.cfg, this.log);
+    const { state, saveCreds } = this.store;
     let version;
     try {
       ({ version } = await fetchLatestBaileysVersion());
@@ -69,7 +70,7 @@ export class WhatsApp extends EventEmitter {
     this.registered = Boolean(state.creds.registered);
 
     sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (u) => this.#onConnection(sock, u));
+    sock.ev.on('connection.update', (u) => this.#onConnection(sock, u).catch((err) => this.log.error('Connection handler failed:', err.message)));
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       if (type !== 'notify') return;
       for (const m of messages) {
@@ -78,7 +79,7 @@ export class WhatsApp extends EventEmitter {
     });
   }
 
-  #onConnection(sock, { connection, lastDisconnect, qr }) {
+  async #onConnection(sock, { connection, lastDisconnect, qr }) {
     if (sock !== this.sock) return;
     // With a pairing number set (WA_PAIRING_NUMBER or whatsapp.pairingNumber),
     // link by typing a code on the bot phone instead of scanning a QR. Handy
@@ -114,13 +115,13 @@ export class WhatsApp extends EventEmitter {
         // A pairing that was never completed (code or QR not used in time)
         // leaves half-made credentials that WhatsApp rejects. Start over.
         this.log.warn('Linking was not completed in time; starting over with a new code');
-        fs.rmSync(this.cfg.authDir, { recursive: true, force: true });
+        await this.store.clear();
       }
       const delay = Math.min(60_000, 2_000 * 2 ** this.retries++);
       this.log.event('wa_disconnected', { code, retryInMs: delay });
       setTimeout(() => this.#connect().catch((err) => {
         this.log.error('Reconnect failed:', err.message);
-        this.#onConnection(this.sock, { connection: 'close', lastDisconnect: { error: err } });
+        this.#onConnection(this.sock, { connection: 'close', lastDisconnect: { error: err } }).catch(() => {});
       }), delay);
     }
   }

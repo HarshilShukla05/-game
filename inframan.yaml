@@ -1,0 +1,24 @@
+# Inframan deployment: one always-on bot, never two (two bots on one WhatsApp
+# number would both answer @game), so a fixed single replica and a recreate
+# rollout instead of blue-green.
+version: v1
+application: smashbot
+services:
+  bot:
+    type: worker
+    scaling:
+      type: "off"
+      min_replicas: 1
+    rollout:
+      strategy: recreate
+    termination_grace_seconds: 30
+    # Chromium renders the game's WebGL in software (no GPU).
+    resources:
+      cpu_request: "1"
+      memory_request: 2Gi
+      cpu_limit: "2"
+      memory_limit: 4Gi
+    secrets:
+      WA_PAIRING_NUMBER: wa-pairing-number
+    connections:
+      REDIS_URL: redis/smashbot
