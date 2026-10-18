@@ -8,11 +8,26 @@
 //  - menuReady:    Unity calls window.onLoadingToMainMenuComplete() when the
 //                  main menu is up.
 //  - loadingState: Unity calls window.updateLoadingState(state) while loading.
-export function pageHooks() {
+// With opts.photonPort443, Photon WebSockets on ports 1909x are moved to 443,
+// for networks that only allow 443 out (some cloud sandboxes). Photon serves
+// the same endpoints on 443.
+export function pageHooks(opts) {
   if (window.top !== window) return;
   const send = (e) => {
     try { window.__skBridge(e); } catch { /* binding not ready */ }
   };
+
+  if (opts && opts.photonPort443) {
+    const OrigWS = window.WebSocket;
+    const PatchedWS = function (url, protocols) {
+      const m = String(url).match(/^wss:\/\/([^/:]+\.(?:photonengine\.io|exitgames\.com)):(\d+)(.*)$/);
+      const target = m && m[2] !== '443' ? `wss://${m[1]}:443${m[3]}` : url;
+      return protocols === undefined ? new OrigWS(target) : new OrigWS(target, protocols);
+    };
+    PatchedWS.prototype = OrigWS.prototype;
+    Object.assign(PatchedWS, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+    window.WebSocket = PatchedWS;
+  }
 
   let realCopyText;
   Object.defineProperty(window, 'copyText', {

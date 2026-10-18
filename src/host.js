@@ -58,7 +58,7 @@ export class Host extends EventEmitter {
       ],
     });
     await this.context.exposeBinding('__skBridge', (_source, e) => this.#onPageEvent(e));
-    await this.context.addInitScript(pageHooks);
+    await this.context.addInitScript(pageHooks, { photonPort443: Boolean(this.cfg.game.photonPort443) });
     if (this.record) await this.context.addInitScript(inputRecorder);
 
     const context = this.context;

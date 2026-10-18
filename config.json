@@ -16,6 +16,7 @@
   },
   "game": {
     "url": "https://smashkarts.io/",
+    "photonPort443": false,
     "recordingFile": "recordings/create.json",
     "menuTimeoutMs": 180000,
     "menuSettleMs": 3000,
