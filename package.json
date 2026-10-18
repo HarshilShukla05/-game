@@ -1,0 +1,21 @@
+{
+  "name": "smashkarts-whatsapp-bot",
+  "version": "0.1.0",
+  "description": "WhatsApp bot that hosts a Smash Karts private room (Nukes, Smash Island) and posts the invite link on @game",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "start:xvfb": "xvfb-run -a -s '-screen 0 1920x1080x24' node src/index.js",
+    "calibrate": "node src/calibrate.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "pino": "10.4.0",
+    "playwright": "1.63.0",
+    "pngjs": "7.0.0",
+    "qrcode-terminal": "0.12.0"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "whatsapp": {
+    "authDir": "auth",
+    "groupIds": [],
+    "trigger": "@game",
+    "replyTemplate": "🏎️ Smash Karts: Nukes on Smash Island\n{link}",
+    "failureText": "⚠️ Couldn't create the room this time. Try @game again in a minute.",
+    "sendFailureScreenshot": true
+  },
+  "browser": {
+    "profileDir": "profile",
+    "channel": "",
+    "executablePath": "",
+    "viewport": { "width": 1280, "height": 720 }
+  },
+  "game": {
+    "url": "https://smashkarts.io/",
+    "recordingFile": "recordings/create.json",
+    "menuTimeoutMs": 180000,
+    "menuSettleMs": 3000,
+    "linkTimeoutMs": 20000,
+    "createAttempts": 3,
+    "roomTtlMinutes": 120,
+    "menuRefreshMinutes": 60
+  },
+  "replay": {
+    "speed": 1,
+    "minGapMs": 300,
+    "maxGapMs": 6000,
+    "visualCheck": true,
+    "visualThreshold": 30,
+    "visualTimeoutMs": 10000
+  },
+  "dataDir": "data"
+}

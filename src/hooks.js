@@ -1,0 +1,81 @@
+// Scripts injected into the game page before any of its own code runs.
+// They are serialized by Playwright, so each function must be self-contained.
+
+// Reports game signals to Node through the exposed `__skBridge` binding:
+//  - copy:         the game copies its invite link via window.copyText(link)
+//                  (see smashkarts.io/scripts/main.js). execCommand('copy') and
+//                  navigator.clipboard are hooked too in case the path changes.
+//  - menuReady:    Unity calls window.onLoadingToMainMenuComplete() when the
+//                  main menu is up.
+//  - loadingState: Unity calls window.updateLoadingState(state) while loading.
+export function pageHooks() {
+  if (window.top !== window) return;
+  const send = (e) => {
+    try { window.__skBridge(e); } catch { /* binding not ready */ }
+  };
+
+  let realCopyText;
+  Object.defineProperty(window, 'copyText', {
+    configurable: true,
+    get() {
+      if (!realCopyText) return undefined;
+      return function (text) {
+        send({ type: 'copy', text: String(text), via: 'copyText' });
+        return realCopyText.apply(this, arguments);
+      };
+    },
+    set(fn) { realCopyText = fn; },
+  });
+
+  const origExec = Document.prototype.execCommand;
+  Document.prototype.execCommand = function (cmd) {
+    if (String(cmd).toLowerCase() === 'copy') {
+      const el = document.activeElement;
+      const text = el && typeof el.value === 'string' ? el.value : String(window.getSelection());
+      send({ type: 'copy', text, via: 'execCommand' });
+    }
+    return origExec.apply(this, arguments);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    const origWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
+    navigator.clipboard.writeText = (text) => {
+      send({ type: 'copy', text: String(text), via: 'clipboard' });
+      return origWrite(text);
+    };
+  }
+
+  // main.js declares these as plain global functions, so wrap them as soon
+  // as they exist (long before Unity finishes loading and calls them).
+  const wrap = (name, before) => {
+    const fn = window[name];
+    if (typeof fn !== 'function' || fn.__skWrapped) return typeof fn === 'function';
+    const wrapped = function () {
+      before.apply(this, arguments);
+      return fn.apply(this, arguments);
+    };
+    wrapped.__skWrapped = true;
+    window[name] = wrapped;
+    return true;
+  };
+  const timer = setInterval(() => {
+    const a = wrap('onLoadingToMainMenuComplete', () => send({ type: 'menuReady' }));
+    const b = wrap('updateLoadingState', (s) => send({ type: 'loadingState', value: String(s) }));
+    if (a && b) clearInterval(timer);
+  }, 50);
+}
+
+// Calibration only: reports raw pointer and key input so a human run through
+// the menus can be recorded and replayed.
+export function inputRecorder() {
+  if (window.top !== window) return;
+  const send = (e) => {
+    try { window.__skBridge(e); } catch { /* binding not ready */ }
+  };
+  const opts = { capture: true, passive: true };
+  window.addEventListener('pointerdown', (e) => send({ type: 'input', kind: 'down', x: e.clientX, y: e.clientY }), opts);
+  window.addEventListener('pointerup', (e) => send({ type: 'input', kind: 'up', x: e.clientX, y: e.clientY }), opts);
+  window.addEventListener('keydown', (e) => {
+    if (!e.repeat) send({ type: 'input', kind: 'key', key: e.key });
+  }, opts);
+}
