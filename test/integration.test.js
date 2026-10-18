@@ -8,9 +8,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Host, extractLink } from '../src/host.js';
+import { Host, extractLink, linkMinutes } from '../src/host.js';
 import { RoomManager } from '../src/roomManager.js';
-import { startRecording } from '../src/recorder.js';
+import { addTimerStep, startRecording } from '../src/recorder.js';
+import { cropPng, patchClip } from '../src/vision.js';
 
 const FIXTURE = pathToFileURL(path.resolve(import.meta.dirname, 'fixtures/fake-game.html')).href;
 const LINK = 'https://smashkarts.io/link/?mode=67109640&wpns=256&room=in123456&arena=smashisland&mdfrs=0';
@@ -29,6 +30,7 @@ function makeConfig(tmp, query) {
       url: `${FIXTURE}?${query}`,
       recordingFile: path.join(tmp, 'create.json'),
       expectLinkParams: { arena: 'smashisland', wpns: '256' },
+      timer: { options: [3, 6, 10, 20], startMinutes: 3, defaultMinutes: 10, arrow: { x: 740, y: 150 } },
       menuTimeoutMs: 30_000,
       menuSettleMs: 300,
       linkTimeoutMs: 5_000,
@@ -48,51 +50,88 @@ const HUMAN_CLICKS = [
   [640, 600], // COPY LINK (only appears after the "server" creates the room)
 ];
 
-const skip = process.env.DISPLAY ? false : 'needs a display (run under xvfb-run)';
-
-test('record a human run, then replay it on a slower load and get the link', { skip, timeout: 120_000 }, async (t) => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
-  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
-
-  // 1. Record: a "human" waits for the real menu, then clicks through.
-  const recCfg = makeConfig(tmp, 'load=1500&room=1000');
-  const recHost = new Host(recCfg, quietLog, { record: true });
-  await recHost.loadMenu();
-  const recording = startRecording(recHost, recCfg.browser.viewport, quietLog);
-  const copied = new Promise((resolve) => recHost.on('copy', resolve));
-  await recHost.page.waitForFunction(() => window.__fake.screen === 'menu');
+// A "human" waits for the real menu, clicks through once and the recording
+// is finished the way calibrate.js does it (timer step inserted before Play).
+async function recordHumanRun(tmp) {
+  const cfg = makeConfig(tmp, 'load=1500&room=1000');
+  const host = new Host(cfg, quietLog, { record: true });
+  await host.loadMenu();
+  const recording = startRecording(host, cfg.browser.viewport, quietLog);
+  const copied = new Promise((resolve) => host.on('copy', resolve));
+  await host.page.waitForFunction(() => window.__fake.screen === 'menu');
   for (const [x, y] of HUMAN_CLICKS) {
-    if (x === 640 && y === 600) await recHost.page.waitForFunction(() => window.__fake.screen === 'lobby');
+    if (x === 640 && y === 600) await host.page.waitForFunction(() => window.__fake.screen === 'lobby');
     await sleep(400);
-    await recHost.page.mouse.click(x, y, { delay: 70 });
+    await host.page.mouse.click(x, y, { delay: 70 });
   }
   assert.equal(extractLink(await copied), LINK);
   await sleep(300);
   const rec = await recording.finish({ sampleLink: LINK });
-  await recHost.close();
-
+  await host.close();
   assert.equal(rec.steps.length, 5);
   assert.ok(rec.steps.every((s) => s.type === 'click' && s.patch), 'every click has a screen patch');
-  fs.writeFileSync(recCfg.game.recordingFile, JSON.stringify(rec));
+  assert.ok(addTimerStep(rec, cfg.game.timer.arrow), 'timer step added');
+  assert.deepEqual(rec.steps.map((s) => s.type), ['click', 'click', 'click', 'timer', 'click', 'click']);
+  return rec;
+}
 
-  // 2. Replay on a much slower load and slower room creation than recorded:
-  //    the visual check must wait instead of wasting clicks.
+const skip = process.env.DISPLAY ? false : 'needs a display (run under xvfb-run)';
+
+test('record a human run, then replay it on a slower load with round lengths', { skip, timeout: 180_000 }, async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const rec = await recordHumanRun(tmp);
+
+  // Replay on a much slower load and slower room creation than recorded:
+  // the visual check must wait instead of wasting clicks.
   const cfg = makeConfig(tmp, 'load=8000&room=4000');
+  fs.writeFileSync(cfg.game.recordingFile, JSON.stringify(rec));
   const host = new Host(cfg, quietLog);
   t.after(() => host.close());
   const rooms = new RoomManager(host, cfg, quietLog);
 
-  // Two friends send @game at the same time: one room, same link for both.
+  // Two friends send @game at the same time: one room, same link, default 10 min.
   const [a, b] = await Promise.all([rooms.getLink(), rooms.getLink()]);
-  assert.equal(a.link, LINK);
-  assert.equal(b.link, LINK);
-  const fake = await host.page.evaluate(() => window.__fake);
+  assert.equal(a.link, b.link);
+  assert.equal(linkMinutes(a.link), 10);
+  assert.equal(a.minutes, 10);
+  let fake = await host.page.evaluate(() => window.__fake);
   assert.deepEqual({ screen: fake.screen, mode: fake.mode, map: fake.map, wasted: fake.wastedClicks },
     { screen: 'lobby', mode: 'nukes', map: 'smash', wasted: 0 });
 
-  // A later @game reuses the live room.
-  const c = await rooms.getLink();
-  assert.deepEqual(c, { link: LINK, reused: true });
+  // A plain @game reuses the live room; "@game 10" too.
+  assert.deepEqual(await rooms.getLink(), { link: a.link, minutes: 10, reused: true });
+  assert.deepEqual(await rooms.getLink(10, true), { link: a.link, minutes: 10, reused: true });
+
+  // "@game 20" asks for another length: a new room with 20 min rounds.
+  const c = await rooms.getLink(20, true);
+  assert.equal(c.reused, false);
+  assert.equal(linkMinutes(c.link), 20);
+  fake = await host.page.evaluate(() => window.__fake);
+  assert.equal(fake.wastedClicks, 0);
+});
+
+test('a known popup over the menu is closed and the room still gets made', { skip, timeout: 120_000 }, async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const rec = await recordHumanRun(tmp);
+
+  const cfg = makeConfig(tmp, 'load=2000&room=1000&popup=1');
+  const host = new Host(cfg, quietLog);
+  t.after(() => host.close());
+  await host.loadMenu();
+  await host.page.waitForFunction(() => window.__fake.screen === 'menu' && window.__fake.popup);
+  // Learn the popup's close button from the screen, as was done for the real promo.
+  const x = 950;
+  const y = 130;
+  rec.popups = [{ name: 'promo', x, y, patch: cropPng(await host.page.screenshot(), patchClip(x, y, cfg.browser.viewport)).toString('base64') }];
+  fs.writeFileSync(cfg.game.recordingFile, JSON.stringify(rec));
+
+  const rooms = new RoomManager(host, cfg, quietLog);
+  const { link } = await rooms.getLink();
+  assert.equal(linkMinutes(link), 10);
+  const fake = await host.page.evaluate(() => window.__fake);
+  assert.deepEqual({ popup: fake.popup, screen: fake.screen, wasted: fake.wastedClicks }, { popup: false, screen: 'lobby', wasted: 0 });
 });
 
 test('a room with the wrong settings is rejected, not posted', { skip, timeout: 120_000 }, async (t) => {
@@ -100,6 +139,7 @@ test('a room with the wrong settings is rejected, not posted', { skip, timeout: 
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   const cfg = makeConfig(tmp, 'load=1000&room=500');
   cfg.game.createAttempts = 1;
+  cfg.game.timer.defaultMinutes = 3; // hand-made recording without a timer step
   cfg.replay.visualCheck = false;
   // Skips the NUKES button: the game still creates a room and copies a link,
   // but with all weapons on.
@@ -122,6 +162,7 @@ test('a recording that never reaches the copy button fails cleanly with a screen
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   const cfg = makeConfig(tmp, 'load=1000&room=500');
+  cfg.game.timer.defaultMinutes = 3; // hand-made recording without a timer step
   cfg.game.linkTimeoutMs = 1_500;
   cfg.replay.visualTimeoutMs = 1_000;
   fs.writeFileSync(cfg.game.recordingFile, JSON.stringify({

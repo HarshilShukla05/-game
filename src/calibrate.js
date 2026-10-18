@@ -7,7 +7,7 @@ import path from 'node:path';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { Host, extractLink } from './host.js';
-import { startRecording } from './recorder.js';
+import { addTimerStep, startRecording } from './recorder.js';
 
 const cfg = loadConfig();
 const log = createLogger(cfg.dataDir);
@@ -27,8 +27,9 @@ console.log(`
 Recording. In the browser window:
   0. WAIT until the main menu is fully loaded and connected (no "Loading…")
   1. Create a private game
-  2. Pick Nukes only and the Smash Island map
-  3. Create the room, then press the button that copies the invite link
+  2. Pick Nukes only and the Smash Island map (leave Round Timer as it is:
+     the bot sets the round length itself, just before Play)
+  3. Press Play, then the button that copies the invite link
 Click only what the bot should click. Recording stops by itself when the
 link is copied. Ctrl+C aborts.
 `);
@@ -43,6 +44,10 @@ const link = await new Promise((resolve) => {
 
 await new Promise((r) => setTimeout(r, 500)); // let the final pointerup arrive
 const rec = await recording.finish({ sampleLink: link });
+
+if (!addTimerStep(rec, cfg.game.timer.arrow)) {
+  log.warn('Could not capture the Round Timer arrow; only the 3 min round length will work.');
+}
 await fs.mkdir(path.dirname(cfg.game.recordingFile), { recursive: true });
 await fs.writeFile(cfg.game.recordingFile, JSON.stringify(rec, null, 2) + '\n');
 log.info(`Saved ${rec.steps.length} steps to ${cfg.game.recordingFile}. Link captured: ${link}`);

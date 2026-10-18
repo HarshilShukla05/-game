@@ -13,6 +13,8 @@
 // ?load=ms simulates a slow load; like the real game, the menu-ready callback
 // fires early (at half the load time) while an in-canvas "Loading…" screen
 // is still up. ?room=ms is how long the "server" takes to create the room.
+// ?popup=1 shows a promo popup over the menu, closed by its X (like the
+// real game's "Check out our NEW GAME").
 var loadingState = 'None';
 function updateLoadingState(n) { loadingState = n; }
 function onLoadingToMainMenuComplete(n) {}
@@ -30,21 +32,25 @@ window.copyText = function (n) {
 var params = new URLSearchParams(location.search);
 var LOAD_MS = Number(params.get('load') || 1000);
 var ROOM_MS = Number(params.get('room') || 1500);
+var TIMER_OPTIONS = [3, 6, 10, 20];
 // Like the real game: a share message whose link encodes the room settings.
 function shareText() {
   var f = window.__fake;
-  var link = 'https://smashkarts.io/link/?mode=67109640&wpns=' + (f.mode === 'nukes' ? 256 : 4095) +
+  // Like the real game: round minutes in bits 8-15 of mode (3 min -> 67109640).
+  var mode = 0x4000008 + (TIMER_OPTIONS[f.timer] << 8);
+  var link = 'https://smashkarts.io/link/?mode=' + mode + '&wpns=' + (f.mode === 'nukes' ? 256 : 4095) +
     '&room=in123456&arena=' + (f.map === 'smash' ? 'smashisland' : 'random') + '&mdfrs=0';
   return 'Come play Smash Karts \nRoom: in123456 \n' + link + ' \nArena: Smash Island \nRules: Free For All';
 }
 
 var c = document.getElementById('gameCanvas');
 var g = c.getContext('2d');
-window.__fake = { screen: 'loading', mode: null, map: null, wastedClicks: 0 };
+window.__fake = { screen: 'loading', mode: null, map: null, timer: 0, popup: params.get('popup') === '1', wastedClicks: 0 };
 
 var BUTTONS = {
   menu: [{ id: 'create', x: 540, y: 360, w: 200, h: 80, color: '#ff7a00', label: 'CREATE' }],
   settings: [
+    { id: 'timer', x: 700, y: 120, w: 80, h: 60, color: '#3366cc', label: ' >>' },
     { id: 'nukes', x: 300, y: 250, w: 200, h: 80, color: '#aa2222', label: 'NUKES' },
     { id: 'smash', x: 780, y: 250, w: 200, h: 80, color: '#2222aa', label: 'SMASH ISLAND' },
     { id: 'start', x: 540, y: 500, w: 200, h: 80, color: '#22aa22', label: 'CREATE ROOM' },
@@ -66,6 +72,16 @@ function draw() {
     g.fillStyle = selected ? '#000' : '#fff'; g.font = '20px sans-serif';
     g.fillText(b.label, b.x + 16, b.y + 48);
   });
+  if (s === 'settings') {
+    g.fillStyle = '#fff'; g.font = '28px sans-serif';
+    g.fillText(TIMER_OPTIONS[window.__fake.timer] + ' min', 520, 162);
+  }
+  if (s === 'menu' && window.__fake.popup) {
+    g.fillStyle = '#7b2cbf'; g.fillRect(300, 100, 680, 550);
+    g.fillStyle = '#fff'; g.font = '40px sans-serif'; g.fillText('NEW GAME!', 520, 380);
+    g.fillStyle = '#1e90ff'; g.fillRect(930, 110, 40, 40);
+    g.fillStyle = '#fff'; g.font = '30px sans-serif'; g.fillText('X', 940, 142);
+  }
 }
 
 function hit(x, y) {
@@ -81,10 +97,18 @@ c.addEventListener('pointerdown', function (e) {
   if (b && b.id === 'copy') window.copyText(shareText());
 });
 c.addEventListener('pointerup', function (e) {
-  var b = hit(e.offsetX, e.offsetY);
   var f = window.__fake;
+  if (f.screen === 'menu' && f.popup) {
+    // Only the popup's X works while it is up.
+    if (e.offsetX >= 930 && e.offsetX <= 970 && e.offsetY >= 110 && e.offsetY <= 150) f.popup = false;
+    else f.wastedClicks++;
+    draw();
+    return;
+  }
+  var b = hit(e.offsetX, e.offsetY);
   if (!b) { f.wastedClicks++; return; }
   if (b.id === 'create') f.screen = 'settings';
+  else if (b.id === 'timer') f.timer = (f.timer + 1) % TIMER_OPTIONS.length;
   else if (b.id === 'nukes') f.mode = 'nukes';
   else if (b.id === 'smash') f.map = 'smash';
   else if (b.id === 'start') {

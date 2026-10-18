@@ -36,6 +36,8 @@ export function startRecording(host, viewport, log) {
       down = { x: e.x, y: e.y, t: now, step };
       const clip = patchClip(e.x, e.y, viewport);
       const before = frame;
+      // Kept off the saved JSON; calibrate cuts the round-timer arrow from it.
+      Object.defineProperty(step, 'frame', { value: before, enumerable: false });
       // Never a clipped screenshot here: it disturbs Unity's input (see replay.js).
       patches.push((before ? Promise.resolve(before) : host.page.screenshot()).then((full) => cropPng(full, clip))
         .then((buf) => { step.patch = buf.toString('base64'); })
@@ -63,4 +65,17 @@ export function startRecording(host, viewport, log) {
       return { recordedAt: new Date().toISOString(), viewport, ...meta, steps };
     },
   };
+}
+
+// The bot sets the round length itself, right before Play: the second-to-last
+// click of a recording (Play, then Copy Link). Inserts a { type: 'timer' } step
+// there and cuts the Round Timer arrow's snapshot from the frame before Play.
+// Returns false when that frame is missing.
+export function addTimerStep(rec, arrow) {
+  const clicks = rec.steps.filter((s) => s.type === 'click');
+  const play = clicks[clicks.length - 2];
+  if (!play?.frame) return false;
+  rec.steps.splice(rec.steps.indexOf(play), 0, { type: 'timer' });
+  rec.timer = { ...arrow, patch: cropPng(play.frame, patchClip(arrow.x, arrow.y, rec.viewport)).toString('base64') };
+  return true;
 }

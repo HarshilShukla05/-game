@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { pageHooks, inputRecorder } from './hooks.js';
-import { replay } from './replay.js';
+import { replay, withTimer } from './replay.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -13,6 +13,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function extractLink(text) {
   const m = String(text ?? '').match(/https?:\/\/[^\s"'<>]+/i);
   return m ? m[0] : null;
+}
+
+// Round length in minutes, from the link's `mode` bitfield: bits 8-15.
+// Observed on the real game: 3 min -> 0x4000308, 10 min -> 0x4000A08.
+export function linkMinutes(link) {
+  try {
+    return (Number(new URL(link).searchParams.get('mode')) >> 8) & 0xff;
+  } catch {
+    return null;
+  }
 }
 
 // The invite link encodes the room's settings. Returns what differs from
@@ -156,8 +166,9 @@ export class Host extends EventEmitter {
   loadMenu() { return this.#run(() => this.#loadMenu()); }
 
   // Replays the "create room" recording from a fresh main menu and returns
-  // the invite link the game copies.
-  createRoom(rec) {
+  // the invite link the game copies. `minutes` sets the round length.
+  createRoom(rec, { minutes } = {}) {
+    const plan = withTimer(rec, minutes, this.cfg.game.timer);
     return this.#run(async () => {
       if (!this.isAlive() || !this.atMenu) await this.#loadMenu();
       this.atMenu = false;
@@ -174,6 +185,7 @@ export class Host extends EventEmitter {
           return;
         }
         const bad = linkMismatches(url, this.cfg.game.expectLinkParams);
+        if (minutes != null && linkMinutes(url) !== minutes) bad.push(`round=${linkMinutes(url)} min (expected ${minutes})`);
         if (bad.length) wrongSettings = `Room has the wrong settings: ${bad.join(', ')}`;
         else link = url;
       };
@@ -182,7 +194,7 @@ export class Host extends EventEmitter {
         const r = this.cfg.replay;
         const debugDir = r.debugShots ? path.join(this.cfg.dataDir, 'screens', `replay-${Date.now()}`) : undefined;
         if (debugDir) await fs.mkdir(debugDir, { recursive: true });
-        await replay(this.page, rec, {
+        await replay(this.page, plan, {
           ...r,
           debugDir,
           firstStepTimeoutMs: this.cfg.game.menuTimeoutMs,

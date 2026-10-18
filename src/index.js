@@ -1,7 +1,7 @@
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { Host } from './host.js';
-import { RoomManager } from './roomManager.js';
+import { RoomManager, parseMinutes } from './roomManager.js';
 import { WhatsApp } from './whatsapp.js';
 
 const WATCHDOG_MS = 60_000;
@@ -14,13 +14,18 @@ const wa = new WhatsApp(cfg, log);
 
 process.on('unhandledRejection', (err) => log.error('Unhandled rejection:', err));
 
-wa.on('command', async ({ name, jid, msg, sender }) => {
-  log.event('command', { name, jid, sender });
+wa.on('command', async ({ name, jid, msg, sender, args }) => {
+  log.event('command', { name, jid, sender, args });
   if (name === 'start') return startRound(jid, msg);
+  const ask = parseMinutes(args, cfg.game.timer);
+  if (ask.error) {
+    await wa.reply(jid, `⚠️ ${ask.error} Example: ${cfg.whatsapp.trigger} 20`, msg).catch((err) => log.error('Reply failed:', err.message));
+    return;
+  }
   await wa.react(jid, msg.key, '⏳');
   try {
-    const { link } = await rooms.getLink();
-    await wa.reply(jid, cfg.whatsapp.replyTemplate.replace('{link}', link), msg);
+    const { link, minutes } = await rooms.getLink(ask.minutes, ask.explicit);
+    await wa.reply(jid, cfg.whatsapp.replyTemplate.replace('{link}', link).replace('{minutes}', minutes), msg);
     await wa.react(jid, msg.key, '✅');
   } catch (err) {
     log.error('Room creation failed:', err.message);

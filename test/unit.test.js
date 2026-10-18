@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
 import { parseCommand } from '../src/whatsapp.js';
 import { cropPng, patchClip, patchDiff, patchMatch, patchSimilarity } from '../src/vision.js';
-import { extractLink, linkMismatches } from '../src/host.js';
+import { extractLink, linkMinutes, linkMismatches } from '../src/host.js';
+import { parseMinutes } from '../src/roomManager.js';
+import { withTimer } from '../src/replay.js';
 
 test('parseCommand matches the trigger only at the start', () => {
   assert.equal(parseCommand('@game', '@game'), '');
@@ -91,4 +93,41 @@ test('cropPng cuts the same pixels a clipped screenshot would', () => {
   assert.deepEqual([...cut.data.slice(0, 4)], [40, 40, 40, 255]);
   const edge = PNG.sync.read(cropPng(full, { x: 8, y: 8, width: 4, height: 4 }));
   assert.deepEqual([...edge.data.slice(0, 4)], [220, 220, 220, 255]);
+});
+
+test('linkMinutes reads the round length from the real game links', () => {
+  // Both captured from the real game on 2026-10-18.
+  assert.equal(linkMinutes(URL_), 3);
+  assert.equal(linkMinutes('https://smashkarts.io/link/?mode=67111432&wpns=8547820&room=in346814&arena=skyarena-tunnels&mdfrs=0'), 10);
+  assert.equal(linkMinutes('nope'), null);
+});
+
+const TIMER = { options: [3, 6, 10, 20], startMinutes: 3, defaultMinutes: 10, arrow: { x: 873, y: 250 } };
+
+test('parseMinutes: default, explicit lengths and bad input', () => {
+  assert.deepEqual(parseMinutes('', TIMER), { minutes: 10, explicit: false });
+  assert.deepEqual(parseMinutes('20', TIMER), { minutes: 20, explicit: true });
+  assert.deepEqual(parseMinutes('6 min', TIMER), { minutes: 6, explicit: true });
+  assert.deepEqual(parseMinutes('20mins pls', TIMER), { minutes: 20, explicit: true });
+  assert.match(parseMinutes('15', TIMER).error, /3, 6, 10, 20 minutes/);
+});
+
+test('withTimer turns the timer step into the right number of arrow presses', () => {
+  const rec = {
+    viewport: { width: 1280, height: 720 },
+    timer: { x: 873, y: 250, patch: 'P' },
+    steps: [{ type: 'click', x: 1, y: 1 }, { type: 'timer' }, { type: 'click', x: 2, y: 2 }],
+  };
+  const presses = (m) => withTimer(rec, m, TIMER).steps.filter((s) => s.x === 873).length;
+  assert.equal(presses(3), 0);
+  assert.equal(presses(6), 1);
+  assert.equal(presses(10), 2);
+  assert.equal(presses(20), 3);
+  assert.equal(presses(undefined), 0);
+  assert.equal(withTimer(rec, 10, TIMER).steps.length, 4);
+  assert.ok(!withTimer(rec, 10, TIMER).steps.some((s) => s.type === 'timer'));
+  assert.throws(() => withTimer(rec, 15, TIMER), /3, 6, 10, 20/);
+  const old = { viewport: rec.viewport, steps: [{ type: 'click', x: 1, y: 1 }] };
+  assert.equal(withTimer(old, 3, TIMER), old);
+  assert.throws(() => withTimer(old, 10, TIMER), /calibrate/);
 });
