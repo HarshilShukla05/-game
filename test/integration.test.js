@@ -35,7 +35,7 @@ function makeConfig(tmp, query) {
       createAttempts: 2,
       roomTtlMinutes: 120,
     },
-    replay: { speed: 1, minGapMs: 200, maxGapMs: 2_000, visualCheck: true, strictVisual: true, visualThreshold: 30, visualTimeoutMs: 8_000 },
+    replay: { speed: 1, minGapMs: 200, maxGapMs: 2_000, visualCheck: true, strictVisual: true, minSimilarity: 0.8, visualThreshold: 30, visualTimeoutMs: 15_000, reclickMs: 3_000 },
     dataDir: tmp,
   };
 }

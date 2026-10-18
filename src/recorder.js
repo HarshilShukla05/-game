@@ -1,16 +1,32 @@
-import { patchClip } from './vision.js';
+import { cropPng, patchClip } from './vision.js';
 
 const DRAG_PX = 12;
+const FRAME_INTERVAL_MS = 150;
 const MODIFIER_KEYS = ['Shift', 'Control', 'Alt', 'Meta'];
 
 // Turns the raw input a Host reports in record mode into replayable steps.
 // Each click also stores a snapshot of what was under the cursor, so replay
-// can wait until the screen looks the same before clicking there.
+// can wait until the screen looks the same before clicking there. The
+// snapshot comes from a frame grabbed just before the press: one taken after
+// the pointerdown event arrives already shows the button's pressed tint.
 export function startRecording(host, viewport, log) {
   const steps = [];
   const patches = [];
   let lastEnd = Date.now();
   let down = null;
+  let frame = null;
+  let active = true;
+
+  (async () => {
+    while (active) {
+      try {
+        frame = await host.page.screenshot();
+      } catch {
+        // Page busy or navigating; try again next tick.
+      }
+      await new Promise((r) => setTimeout(r, FRAME_INTERVAL_MS));
+    }
+  })();
 
   const onInput = (e) => {
     const now = Date.now();
@@ -18,7 +34,10 @@ export function startRecording(host, viewport, log) {
       const step = { type: 'click', x: Math.round(e.x), y: Math.round(e.y), holdMs: 80, waitBeforeMs: now - lastEnd };
       steps.push(step);
       down = { x: e.x, y: e.y, t: now, step };
-      patches.push(host.page.screenshot({ clip: patchClip(e.x, e.y, viewport) })
+      const clip = patchClip(e.x, e.y, viewport);
+      const before = frame;
+      // Never a clipped screenshot here: it disturbs Unity's input (see replay.js).
+      patches.push((before ? Promise.resolve(before) : host.page.screenshot()).then((full) => cropPng(full, clip))
         .then((buf) => { step.patch = buf.toString('base64'); })
         .catch((err) => log.warn('Patch capture failed:', err.message)));
       log.info(`click #${steps.length} at (${step.x}, ${step.y}) after ${step.waitBeforeMs} ms`);
@@ -38,6 +57,7 @@ export function startRecording(host, viewport, log) {
   return {
     steps,
     async finish(meta = {}) {
+      active = false;
       host.off('input', onInput);
       await Promise.all(patches);
       return { recordedAt: new Date().toISOString(), viewport, ...meta, steps };

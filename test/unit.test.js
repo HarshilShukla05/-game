@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
 import { parseCommand } from '../src/whatsapp.js';
-import { patchClip, patchDiff } from '../src/vision.js';
+import { cropPng, patchClip, patchDiff, patchMatch, patchSimilarity } from '../src/vision.js';
 import { extractLink, linkMismatches } from '../src/host.js';
 
 test('parseCommand matches the trigger only at the start', () => {
@@ -52,4 +52,43 @@ test('patchDiff is 0 for identical and large for different patches', () => {
   assert.equal(patchDiff(solid(10, 20, 30), solid(10, 20, 30)), 0);
   assert.equal(patchDiff(solid(0, 0, 0), solid(255, 255, 255)), 255);
   assert.equal(patchDiff(solid(100, 100, 100), solid(110, 90, 100)), 20 / 3);
+});
+
+// 40x40 patch: a light background with a dark square, shifted in brightness by `shift`.
+const shape = (shift = 0, inverted = false) => {
+  const png = new PNG({ width: 40, height: 40 });
+  for (let y = 0; y < 40; y++) {
+    for (let x = 0; x < 40; x++) {
+      const inside = x >= 10 && x < 30 && y >= 10 && y < 30;
+      const v = Math.max(0, Math.min(255, ((inside !== inverted) ? 40 : 220) + shift));
+      png.data.set([v, v, v, 255], (y * 40 + x) * 4);
+    }
+  }
+  return PNG.sync.write(png);
+};
+
+test('patchSimilarity ignores a pressed/hover tint but not a different shape', () => {
+  assert.ok(patchSimilarity(shape(), shape(-35)) > 0.99, 'darker tint of the same button');
+  assert.ok(patchSimilarity(shape(), shape(), true) > 0.99);
+  assert.ok(patchSimilarity(shape(), shape(0, true)) < 0, 'inverted shape');
+  const flat = new PNG({ width: 40, height: 40 });
+  flat.data.fill(128);
+  assert.equal(patchSimilarity(PNG.sync.write(flat), shape()), null, 'flat patch has no shape');
+});
+
+test('patchMatch falls back to colour difference for flat patches', () => {
+  const opts = { minSimilarity: 0.8, maxDiff: 30 };
+  assert.equal(patchMatch(shape(), shape(-35), opts).matched, true);
+  assert.equal(patchMatch(shape(), shape(0, true), opts).matched, false);
+  assert.equal(patchMatch(solid(100, 100, 100), solid(110, 90, 100), opts).matched, true);
+  assert.equal(patchMatch(solid(0, 0, 0), solid(200, 200, 200), opts).matched, false);
+});
+
+test('cropPng cuts the same pixels a clipped screenshot would', () => {
+  const full = shape();
+  const cut = PNG.sync.read(cropPng(full, { x: 10, y: 10, width: 4, height: 4 }));
+  assert.equal(cut.width, 4);
+  assert.deepEqual([...cut.data.slice(0, 4)], [40, 40, 40, 255]);
+  const edge = PNG.sync.read(cropPng(full, { x: 8, y: 8, width: 4, height: 4 }));
+  assert.deepEqual([...edge.data.slice(0, 4)], [220, 220, 220, 255]);
 });

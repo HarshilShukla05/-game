@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
-import { patchClip, patchDiff } from './vision.js';
+import path from 'node:path';
+import { cropPng, patchClip, patchMatch } from './vision.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -19,15 +20,34 @@ export async function loadRecording(file) {
 // Replays a calibrated recording. Before each click it hovers the target and,
 // when the recording holds a snapshot of that spot, waits until the screen
 // matches it again. A slow load then delays the click instead of wasting it.
-// If the screen never matches: with strictVisual the replay fails (a click on
-// the wrong thing could build a wrong room), otherwise it clicks anyway.
+// After each click it waits for the next step's spot to appear, and clicks
+// again while the clicked spot still looks untouched: the game sometimes
+// shows a screen before it accepts input, and swallows the click.
+// If a spot never matches: with strictVisual the replay fails (a click on the
+// wrong thing could build a wrong room), otherwise it clicks anyway.
 export async function replay(page, rec, opts) {
-  const { speed, minGapMs, maxGapMs, visualCheck, strictVisual, visualThreshold, visualTimeoutMs, firstStepTimeoutMs, log, shouldStop = () => false } = opts;
+  const {
+    speed, minGapMs, maxGapMs, visualCheck, strictVisual, minSimilarity, visualThreshold,
+    visualTimeoutMs, reclickMs, clickDelayMs = 0, firstStepTimeoutMs, debugDir, log, shouldStop = () => false,
+  } = opts;
+  // With debugDir, a full screenshot is saved before every click and re-click.
+  const snap = async (name) => {
+    if (debugDir) await page.screenshot({ path: path.join(debugDir, `${name}.png`) }).catch(() => {});
+  };
   const vp = page.viewportSize();
   const sameViewport = vp.width === rec.viewport.width && vp.height === rec.viewport.height;
   if (!sameViewport) log.warn(`Viewport ${vp.width}x${vp.height} differs from recording ${rec.viewport.width}x${rec.viewport.height}; scaling clicks, visual check off`);
   const sx = vp.width / rec.viewport.width;
   const sy = vp.height / rec.viewport.height;
+  const checks = visualCheck && sameViewport;
+  const match = { minSimilarity, maxDiff: visualThreshold };
+  // The game's menu-ready callback fires before the menu takes input, so the
+  // first click may need much longer than the rest.
+  const timeoutFor = (i) => (i === 0 ? Math.max(visualTimeoutMs, firstStepTimeoutMs ?? 0) : visualTimeoutMs);
+  const fail = (msg) => {
+    if (strictVisual) throw new Error(msg);
+    log.warn(`${msg}; continuing anyway`);
+  };
 
   for (const [i, step] of rec.steps.entries()) {
     if (shouldStop()) return;
@@ -43,32 +63,71 @@ export async function replay(page, rec, opts) {
     const x = step.x * sx;
     const y = step.y * sy;
     await page.mouse.move(x, y, { steps: 4 });
-    if (visualCheck && sameViewport && step.patch) {
-      // The game's menu-ready callback fires before Unity's own loading screen
-      // is gone, so the first click may have to wait much longer than the rest.
-      const timeoutMs = i === 0 ? Math.max(visualTimeoutMs, firstStepTimeoutMs ?? 0) : visualTimeoutMs;
-      const { matched, diff } = await waitForPatch(page, step, rec.viewport, visualThreshold, timeoutMs, shouldStop);
+    if (checks && step.patch) {
+      const r = await waitForPatch(page, step, rec.viewport, match, timeoutFor(i), shouldStop);
       if (shouldStop()) return;
-      if (!matched && strictVisual) throw new Error(`Step ${i + 1} at (${step.x}, ${step.y}): screen never matched the recording (best diff ${diff.toFixed(1)})`);
-      if (!matched) log.warn(`Step ${i + 1}: screen did not match the recording (best diff ${diff.toFixed(1)}), clicking anyway`);
-      else log.info(`Step ${i + 1}: matched (diff ${diff.toFixed(1)})`);
+      if (r.matched) log.info(`Step ${i + 1}: matched (${r.score})`);
+      else fail(`Step ${i + 1} at (${step.x}, ${step.y}): screen never matched the recording (last ${r.score})`);
     }
-    await page.mouse.down();
-    await sleep(clamp(step.holdMs ?? 80, 40, 400));
-    await page.mouse.up();
+    await snap(`step${String(i + 1).padStart(2, '0')}-before`);
+    await sleep(clickDelayMs);
+    await click(page, step);
+
+    const next = rec.steps[i + 1];
+    if (checks && step.patch && next?.type === 'click' && next.patch) {
+      let reclicks = 0;
+      const appeared = await confirmClick(page, step, next, { x, y }, rec.viewport, match, timeoutFor(i), reclickMs, clickDelayMs, shouldStop, async () => {
+        log.warn(`Step ${i + 1}: the screen did not react, clicking again`);
+        await snap(`step${String(i + 1).padStart(2, '0')}-reclick${++reclicks}`);
+      });
+      if (shouldStop()) return;
+      if (!appeared) fail(`Step ${i + 2} at (${next.x}, ${next.y}) never appeared after step ${i + 1}`);
+    }
   }
 }
 
-async function waitForPatch(page, step, viewport, threshold, timeoutMs, shouldStop) {
-  const expected = Buffer.from(step.patch, 'base64');
-  const clip = patchClip(step.x, step.y, viewport);
+async function click(page, step) {
+  await page.mouse.down();
+  await sleep(clamp(step.holdMs ?? 80, 40, 400));
+  await page.mouse.up();
+}
+
+// Takes a full screenshot and crops it here: a clipped page.screenshot makes
+// Chromium relayout the page, and Unity then drops or misplaces the next
+// click (seen on the real game: Create ignored, a dialog closed by its own
+// button). Full screenshots between clicks leave input alone.
+async function looksLike(page, step, viewport, match) {
+  const shot = cropPng(await page.screenshot(), patchClip(step.x, step.y, viewport));
+  return patchMatch(shot, Buffer.from(step.patch, 'base64'), match);
+}
+
+async function waitForPatch(page, step, viewport, match, timeoutMs, shouldStop) {
   const deadline = Date.now() + timeoutMs;
-  let best = Infinity;
+  let last = { matched: false, score: 'no check' };
   while (Date.now() < deadline && !shouldStop()) {
-    const diff = patchDiff(await page.screenshot({ clip }), expected);
-    best = Math.min(best, diff);
-    if (diff <= threshold) return { matched: true, diff };
+    last = await looksLike(page, step, viewport, match);
+    if (last.matched) return last;
     await sleep(250);
   }
-  return { matched: false, diff: best };
+  return last;
+}
+
+// Waits for `next` to appear; re-clicks `step` (at most every reclickMs) while
+// its own spot still matches, i.e. the click had no visible effect. Toggles
+// are safe: once toggled, the spot no longer matches its untouched snapshot.
+async function confirmClick(page, step, next, at, viewport, match, timeoutMs, reclickMs, clickDelayMs, shouldStop, onReclick) {
+  const deadline = Date.now() + timeoutMs;
+  let lastClick = Date.now();
+  while (Date.now() < deadline && !shouldStop()) {
+    if ((await looksLike(page, next, viewport, match)).matched) return true;
+    if (Date.now() - lastClick >= reclickMs && (await looksLike(page, step, viewport, match)).matched) {
+      await onReclick();
+      await page.mouse.move(at.x, at.y);
+      await sleep(clickDelayMs);
+      await click(page, step);
+      lastClick = Date.now();
+    }
+    await sleep(250);
+  }
+  return false;
 }

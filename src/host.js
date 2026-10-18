@@ -180,8 +180,11 @@ export class Host extends EventEmitter {
       this.on('copy', onCopy);
       try {
         const r = this.cfg.replay;
+        const debugDir = r.debugShots ? path.join(this.cfg.dataDir, 'screens', `replay-${Date.now()}`) : undefined;
+        if (debugDir) await fs.mkdir(debugDir, { recursive: true });
         await replay(this.page, rec, {
           ...r,
+          debugDir,
           firstStepTimeoutMs: this.cfg.game.menuTimeoutMs,
           log: this.log,
           shouldStop: () => Boolean(link || wrongSettings),

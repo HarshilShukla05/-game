@@ -33,8 +33,10 @@
     "maxGapMs": 6000,
     "visualCheck": true,
     "strictVisual": true,
+    "minSimilarity": 0.8,
     "visualThreshold": 30,
-    "visualTimeoutMs": 10000
+    "visualTimeoutMs": 60000,
+    "reclickMs": 5000
   },
   "dataDir": "data"
 }
