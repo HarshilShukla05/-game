@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
-import { Host, isLink } from './host.js';
+import { Host, extractLink } from './host.js';
 import { startRecording } from './recorder.js';
 
 const cfg = loadConfig();
@@ -35,8 +35,9 @@ link is copied. Ctrl+C aborts.
 
 const link = await new Promise((resolve) => {
   host.on('copy', (text) => {
-    if (isLink(text)) resolve(text);
-    else log.warn(`Copied text is not a link, still recording: ${JSON.stringify(text)}`);
+    const url = extractLink(text);
+    if (url) resolve(url);
+    else log.warn(`Copied text has no link, still recording: ${JSON.stringify(text)}`);
   });
 });
 

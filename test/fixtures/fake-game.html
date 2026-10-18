@@ -30,7 +30,13 @@ window.copyText = function (n) {
 var params = new URLSearchParams(location.search);
 var LOAD_MS = Number(params.get('load') || 1000);
 var ROOM_MS = Number(params.get('room') || 1500);
-var LINK = 'https://smashkarts.io/?room=TEST123';
+// Like the real game: a share message whose link encodes the room settings.
+function shareText() {
+  var f = window.__fake;
+  var link = 'https://smashkarts.io/link/?mode=67109640&wpns=' + (f.mode === 'nukes' ? 256 : 4095) +
+    '&room=in123456&arena=' + (f.map === 'smash' ? 'smashisland' : 'random') + '&mdfrs=0';
+  return 'Come play Smash Karts \nRoom: in123456 \n' + link + ' \nArena: Smash Island \nRules: Free For All';
+}
 
 var c = document.getElementById('gameCanvas');
 var g = c.getContext('2d');
@@ -72,7 +78,7 @@ function hit(x, y) {
 // other buttons act on release.
 c.addEventListener('pointerdown', function (e) {
   var b = hit(e.offsetX, e.offsetY);
-  if (b && b.id === 'copy') window.copyText(LINK);
+  if (b && b.id === 'copy') window.copyText(shareText());
 });
 c.addEventListener('pointerup', function (e) {
   var b = hit(e.offsetX, e.offsetY);
@@ -82,7 +88,6 @@ c.addEventListener('pointerup', function (e) {
   else if (b.id === 'nukes') f.mode = 'nukes';
   else if (b.id === 'smash') f.map = 'smash';
   else if (b.id === 'start') {
-    if (f.mode !== 'nukes' || f.map !== 'smash') { f.wastedClicks++; return; }
     f.screen = 'creating';
     setTimeout(function () { f.screen = 'lobby'; draw(); }, ROOM_MS);
   }

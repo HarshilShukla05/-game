@@ -19,10 +19,10 @@ export async function loadRecording(file) {
 // Replays a calibrated recording. Before each click it hovers the target and,
 // when the recording holds a snapshot of that spot, waits until the screen
 // matches it again. A slow load then delays the click instead of wasting it.
-// If the screen never matches, it clicks anyway after visualTimeoutMs and
-// lets the caller's link timeout decide.
+// If the screen never matches: with strictVisual the replay fails (a click on
+// the wrong thing could build a wrong room), otherwise it clicks anyway.
 export async function replay(page, rec, opts) {
-  const { speed, minGapMs, maxGapMs, visualCheck, visualThreshold, visualTimeoutMs, firstStepTimeoutMs, log, shouldStop = () => false } = opts;
+  const { speed, minGapMs, maxGapMs, visualCheck, strictVisual, visualThreshold, visualTimeoutMs, firstStepTimeoutMs, log, shouldStop = () => false } = opts;
   const vp = page.viewportSize();
   const sameViewport = vp.width === rec.viewport.width && vp.height === rec.viewport.height;
   if (!sameViewport) log.warn(`Viewport ${vp.width}x${vp.height} differs from recording ${rec.viewport.width}x${rec.viewport.height}; scaling clicks, visual check off`);
@@ -47,8 +47,11 @@ export async function replay(page, rec, opts) {
       // The game's menu-ready callback fires before Unity's own loading screen
       // is gone, so the first click may have to wait much longer than the rest.
       const timeoutMs = i === 0 ? Math.max(visualTimeoutMs, firstStepTimeoutMs ?? 0) : visualTimeoutMs;
-      const matched = await waitForPatch(page, step, rec.viewport, visualThreshold, timeoutMs, shouldStop);
-      if (!matched) log.warn(`Step ${i + 1}: screen did not match the recording, clicking anyway`);
+      const { matched, diff } = await waitForPatch(page, step, rec.viewport, visualThreshold, timeoutMs, shouldStop);
+      if (shouldStop()) return;
+      if (!matched && strictVisual) throw new Error(`Step ${i + 1} at (${step.x}, ${step.y}): screen never matched the recording (best diff ${diff.toFixed(1)})`);
+      if (!matched) log.warn(`Step ${i + 1}: screen did not match the recording (best diff ${diff.toFixed(1)}), clicking anyway`);
+      else log.info(`Step ${i + 1}: matched (diff ${diff.toFixed(1)})`);
     }
     await page.mouse.down();
     await sleep(clamp(step.holdMs ?? 80, 40, 400));
@@ -60,10 +63,12 @@ async function waitForPatch(page, step, viewport, threshold, timeoutMs, shouldSt
   const expected = Buffer.from(step.patch, 'base64');
   const clip = patchClip(step.x, step.y, viewport);
   const deadline = Date.now() + timeoutMs;
+  let best = Infinity;
   while (Date.now() < deadline && !shouldStop()) {
-    const shot = await page.screenshot({ clip });
-    if (patchDiff(shot, expected) <= threshold) return true;
+    const diff = patchDiff(await page.screenshot({ clip }), expected);
+    best = Math.min(best, diff);
+    if (diff <= threshold) return { matched: true, diff };
     await sleep(250);
   }
-  return false;
+  return { matched: false, diff: best };
 }

@@ -6,7 +6,28 @@ import { pageHooks, inputRecorder } from './hooks.js';
 import { replay } from './replay.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export const isLink = (t) => /^https?:\/\/\S+$/i.test(String(t).trim());
+
+// The game copies a share message ("Come play Smash Karts\nRoom: in123\n
+// https://smashkarts.io/link/?...&arena=smashisland&wpns=256 ..."), not a bare
+// URL, so take the first URL in whatever it copied.
+export function extractLink(text) {
+  const m = String(text ?? '').match(/https?:\/\/[^\s"'<>]+/i);
+  return m ? m[0] : null;
+}
+
+// The invite link encodes the room's settings. Returns what differs from
+// `expected` (e.g. { arena: 'smashisland', wpns: '256' }); empty means it matches.
+export function linkMismatches(link, expected = {}) {
+  let params;
+  try {
+    params = new URL(link).searchParams;
+  } catch {
+    return ['link is not a valid URL'];
+  }
+  return Object.entries(expected)
+    .filter(([key, value]) => params.get(key) !== String(value))
+    .map(([key, value]) => `${key}=${params.get(key)} (expected ${value})`);
+}
 
 // Owns the real Chromium tab that hosts the room. All public operations are
 // serialized through one queue, so a reset can never interleave with a create.
@@ -141,10 +162,20 @@ export class Host extends EventEmitter {
       if (!this.isAlive() || !this.atMenu) await this.#loadMenu();
       this.atMenu = false;
 
+      // A misclick that picks the wrong arena or weapons still yields a link,
+      // so every link is checked against the expected settings before use.
       let link = null;
+      let wrongSettings = null;
       const onCopy = (text) => {
-        if (!link && isLink(text)) link = text;
-        else if (!link) this.log.warn(`Game copied something that is not a link: ${JSON.stringify(text)}`);
+        if (link || wrongSettings) return;
+        const url = extractLink(text);
+        if (!url) {
+          this.log.warn(`Game copied text without a link: ${JSON.stringify(text)}`);
+          return;
+        }
+        const bad = linkMismatches(url, this.cfg.game.expectLinkParams);
+        if (bad.length) wrongSettings = `Room has the wrong settings: ${bad.join(', ')}`;
+        else link = url;
       };
       this.on('copy', onCopy);
       try {
@@ -153,14 +184,23 @@ export class Host extends EventEmitter {
           ...r,
           firstStepTimeoutMs: this.cfg.game.menuTimeoutMs,
           log: this.log,
-          shouldStop: () => Boolean(link),
+          shouldStop: () => Boolean(link || wrongSettings),
         });
-        if (!link) await this.#waitFor('copy', this.cfg.game.linkTimeoutMs, isLink);
+        if (!link && !wrongSettings) await this.#waitFor('copy', this.cfg.game.linkTimeoutMs, (t) => Boolean(extractLink(t)));
+        if (wrongSettings) throw new Error(wrongSettings);
         if (!link) throw new Error('Replay finished but the game never copied an invite link');
         return link;
       } finally {
         this.off('copy', onCopy);
       }
+    });
+  }
+
+  // The room host has to start each round; the lobby says "Press Space to start round".
+  startRound() {
+    return this.#run(async () => {
+      if (!this.isAlive()) throw new Error('The game is not running');
+      await this.page.keyboard.press('Space');
     });
   }
 

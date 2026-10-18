@@ -77,6 +77,13 @@ export class RoomManager {
     this.link = null;
   }
 
+  async startRound() {
+    if (this.state !== 'live') throw new Error('No room is live');
+    await this.host.startRound();
+    this.#armTtl();
+    this.log.event('round_started', { link: this.link });
+  }
+
   async close(reason) {
     if (this.state !== 'live') return;
     this.log.event('room_closed', { reason, livedMs: Date.now() - this.createdAt });

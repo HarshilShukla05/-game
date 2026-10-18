@@ -8,12 +8,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Host } from '../src/host.js';
+import { Host, extractLink } from '../src/host.js';
 import { RoomManager } from '../src/roomManager.js';
 import { startRecording } from '../src/recorder.js';
 
 const FIXTURE = pathToFileURL(path.resolve(import.meta.dirname, 'fixtures/fake-game.html')).href;
-const LINK = 'https://smashkarts.io/?room=TEST123';
+const LINK = 'https://smashkarts.io/link/?mode=67109640&wpns=256&room=in123456&arena=smashisland&mdfrs=0';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const quietLog = { info() {}, warn() {}, error() {}, event() {} };
 
@@ -28,13 +28,14 @@ function makeConfig(tmp, query) {
     game: {
       url: `${FIXTURE}?${query}`,
       recordingFile: path.join(tmp, 'create.json'),
+      expectLinkParams: { arena: 'smashisland', wpns: '256' },
       menuTimeoutMs: 30_000,
       menuSettleMs: 300,
       linkTimeoutMs: 5_000,
       createAttempts: 2,
       roomTtlMinutes: 120,
     },
-    replay: { speed: 1, minGapMs: 200, maxGapMs: 2_000, visualCheck: true, visualThreshold: 30, visualTimeoutMs: 8_000 },
+    replay: { speed: 1, minGapMs: 200, maxGapMs: 2_000, visualCheck: true, strictVisual: true, visualThreshold: 30, visualTimeoutMs: 8_000 },
     dataDir: tmp,
   };
 }
@@ -65,7 +66,7 @@ test('record a human run, then replay it on a slower load and get the link', { s
     await sleep(400);
     await recHost.page.mouse.click(x, y, { delay: 70 });
   }
-  assert.equal(await copied, LINK);
+  assert.equal(extractLink(await copied), LINK);
   await sleep(300);
   const rec = await recording.finish({ sampleLink: LINK });
   await recHost.close();
@@ -92,6 +93,29 @@ test('record a human run, then replay it on a slower load and get the link', { s
   // A later @game reuses the live room.
   const c = await rooms.getLink();
   assert.deepEqual(c, { link: LINK, reused: true });
+});
+
+test('a room with the wrong settings is rejected, not posted', { skip, timeout: 120_000 }, async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const cfg = makeConfig(tmp, 'load=1000&room=500');
+  cfg.game.createAttempts = 1;
+  cfg.replay.visualCheck = false;
+  // Skips the NUKES button: the game still creates a room and copies a link,
+  // but with all weapons on.
+  const clicks = [[640, 400], [880, 290], [640, 540], [640, 600]];
+  fs.writeFileSync(cfg.game.recordingFile, JSON.stringify({
+    viewport: cfg.browser.viewport,
+    steps: clicks.map(([x, y], i) => ({ type: 'click', x, y, holdMs: 60, waitBeforeMs: i === 3 ? 2_000 : 300 })),
+  }));
+
+  const host = new Host(cfg, quietLog);
+  t.after(() => host.close());
+  const rooms = new RoomManager(host, cfg, quietLog);
+  await host.loadMenu();
+  await host.page.waitForFunction(() => window.__fake.screen === 'menu');
+  await assert.rejects(rooms.getLink(), /wrong settings: wpns=4095 \(expected 256\)/);
+  assert.equal(rooms.state, 'idle');
 });
 
 test('a recording that never reaches the copy button fails cleanly with a screenshot', { skip, timeout: 120_000 }, async (t) => {

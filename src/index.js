@@ -14,8 +14,9 @@ const wa = new WhatsApp(cfg, log);
 
 process.on('unhandledRejection', (err) => log.error('Unhandled rejection:', err));
 
-wa.on('command', async ({ jid, msg, sender }) => {
-  log.event('command', { jid, sender, text: cfg.whatsapp.trigger });
+wa.on('command', async ({ name, jid, msg, sender }) => {
+  log.event('command', { name, jid, sender });
+  if (name === 'start') return startRound(jid, msg);
   await wa.react(jid, msg.key, '⏳');
   try {
     const { link } = await rooms.getLink();
@@ -35,6 +36,18 @@ wa.on('command', async ({ jid, msg, sender }) => {
     }
   }
 });
+
+// The room host has to start every round, and the bot is the host.
+async function startRound(jid, msg) {
+  try {
+    await rooms.startRound();
+    await wa.react(jid, msg.key, '🏁');
+  } catch (err) {
+    log.error('Start failed:', err.message);
+    await wa.reply(jid, rooms.state === 'live' ? `⚠️ Couldn't start the round: ${err.message}` : `No room yet. Send ${cfg.whatsapp.trigger} first.`, msg)
+      .catch((sendErr) => log.error('Could not report the failure to the group:', sendErr.message));
+  }
+}
 
 wa.on('fatal', () => shutdown(1));
 

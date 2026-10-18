@@ -28,7 +28,8 @@ function messageText(message) {
 
 const toSeconds = (ts) => (ts && typeof ts === 'object' ? Number(ts.toString()) : Number(ts));
 
-// Emits 'command' { jid, msg, sender, args } for the trigger in allowed groups,
+// Emits 'command' { name, jid, msg, sender, args } for a trigger in allowed groups
+// (name 'game' for whatsapp.trigger, 'start' for whatsapp.startTrigger),
 // and 'fatal' when the session is logged out.
 export class WhatsApp extends EventEmitter {
   constructor(cfg, log) {
@@ -125,8 +126,16 @@ export class WhatsApp extends EventEmitter {
     this.seen.add(id);
     if (this.seen.size > 1000) this.seen.delete(this.seen.values().next().value);
 
-    const args = parseCommand(messageText(m.message), this.cfg.trigger);
-    if (args === null) return;
+    const text = messageText(m.message);
+    const triggers = { game: this.cfg.trigger, start: this.cfg.startTrigger };
+    let name = null;
+    let args = null;
+    for (const [key, trigger] of Object.entries(triggers)) {
+      if (!trigger) continue;
+      args = parseCommand(text, trigger);
+      if (args !== null) { name = key; break; }
+    }
+    if (name === null) return;
     if (toSeconds(m.messageTimestamp) < this.startedAt - MAX_COMMAND_AGE_S) return;
 
     const allowed = this.cfg.groupIds;
@@ -134,11 +143,11 @@ export class WhatsApp extends EventEmitter {
     if (!allowed.length && !this.knownGroups.has(jid)) {
       this.knownGroups.add(jid);
       const subject = await this.sock.groupMetadata(jid).then((g) => g.subject).catch(() => '?');
-      this.log.warn(`Setup mode: "${this.cfg.trigger}" from group "${subject}" id=${jid}. Put this id in config.json whatsapp.groupIds to lock the bot to it.`);
+      this.log.warn(`Setup mode: command from group "${subject}" id=${jid}. Put this id in config.json whatsapp.groupIds to lock the bot to it.`);
     }
 
     const sender = m.key.participantAlt || m.key.participant || null;
-    this.emit('command', { jid, msg: m, sender, args });
+    this.emit('command', { name, jid, msg: m, sender, args });
   }
 
   async #send(jid, content, opts) {
