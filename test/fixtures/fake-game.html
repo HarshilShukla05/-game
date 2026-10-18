@@ -39,7 +39,7 @@ var TIMER_OPTIONS = [3, 6, 10, 20];
 function shareText() {
   var f = window.__fake;
   // Like the real game: round minutes in bits 8-15 of mode (3 min -> 67109640).
-  var mode = 0x4000008 + (TIMER_OPTIONS[f.timer] << 8);
+  var mode = 0x4000008 + (TIMER_OPTIONS[f.timer] << 8) + (f.teams ? 2 : 0);
   var link = 'https://smashkarts.io/link/?mode=' + mode + '&wpns=' + (f.mode === 'nukes' ? 256 : 4095) +
     '&room=in123456&arena=' + (f.map === 'smash' ? 'smashisland' : 'random') + '&mdfrs=0';
   return 'Come play Smash Karts \nRoom: in123456 \n' + link + ' \nArena: Smash Island \nRules: Free For All';
@@ -47,12 +47,13 @@ function shareText() {
 
 var c = document.getElementById('gameCanvas');
 var g = c.getContext('2d');
-window.__fake = { screen: 'loading', mode: null, map: null, timer: 0, popup: params.get('popup') === '1', paused: false, wastedClicks: 0 };
+window.__fake = { screen: 'loading', mode: null, map: null, timer: 0, teams: false, popup: params.get('popup') === '1', paused: false, wastedClicks: 0 };
 
 var BUTTONS = {
   menu: [{ id: 'create', x: 540, y: 360, w: 200, h: 80, color: '#ff7a00', label: 'CREATE' }],
   settings: [
     { id: 'timer', x: 700, y: 120, w: 80, h: 60, color: '#3366cc', label: ' >>' },
+    { id: 'teams', x: 300, y: 400, w: 60, h: 60, color: '#eeeeee', label: '' },
     { id: 'nukes', x: 300, y: 250, w: 200, h: 80, color: '#aa2222', label: 'NUKES' },
     { id: 'smash', x: 780, y: 250, w: 200, h: 80, color: '#2222aa', label: 'SMASH ISLAND' },
     { id: 'start', x: 540, y: 500, w: 200, h: 80, color: '#22aa22', label: 'CREATE ROOM' },
@@ -69,6 +70,11 @@ function draw() {
   if (s === 'creating') g.fillText('Creating room…', 40, 680);
   (BUTTONS[s] || []).forEach(function (b) {
     var selected = (b.id === 'nukes' && window.__fake.mode === 'nukes') || (b.id === 'smash' && window.__fake.map === 'smash');
+    if (b.id === 'teams') {
+      g.fillStyle = '#ffffff'; g.fillRect(b.x, b.y, b.w, b.h);
+      if (window.__fake.teams) { g.fillStyle = '#1e90ff'; g.font = '44px sans-serif'; g.fillText('✓', b.x + 12, b.y + 46); }
+      return;
+    }
     g.fillStyle = selected ? '#ffffff' : b.color;
     g.fillRect(b.x, b.y, b.w, b.h);
     g.fillStyle = selected ? '#000' : '#fff'; g.font = '20px sans-serif';
@@ -129,6 +135,7 @@ c.addEventListener('pointerup', function (e) {
   if (!b) { f.wastedClicks++; return; }
   if (b.id === 'create') f.screen = 'settings';
   else if (b.id === 'timer') f.timer = (f.timer + 1) % TIMER_OPTIONS.length;
+  else if (b.id === 'teams') f.teams = !f.teams;
   else if (b.id === 'nukes') f.mode = 'nukes';
   else if (b.id === 'smash') f.map = 'smash';
   else if (b.id === 'start') {

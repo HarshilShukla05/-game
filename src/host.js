@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { pageHooks, inputRecorder } from './hooks.js';
-import { click, looksLike, replay, withTimer } from './replay.js';
+import { click, looksLike, replay, withOptions } from './replay.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -20,6 +20,15 @@ export function extractLink(text) {
 export function linkMinutes(link) {
   try {
     return (Number(new URL(link).searchParams.get('mode')) >> 8) & 0xff;
+  } catch {
+    return null;
+  }
+}
+
+// Team Battle rooms have bit 1 of `mode` set (FFA 3 min 0x4000308, teams 0x400030A).
+export function linkTeams(link) {
+  try {
+    return (Number(new URL(link).searchParams.get('mode')) & 2) !== 0;
   } catch {
     return null;
   }
@@ -172,9 +181,10 @@ export class Host extends EventEmitter {
   loadMenu() { return this.#run(() => this.#loadMenu()); }
 
   // Replays the "create room" recording from a fresh main menu and returns
-  // the invite link the game copies. `minutes` sets the round length.
-  createRoom(rec, { minutes } = {}) {
-    const plan = withTimer(rec, minutes, this.cfg.game.timer);
+  // the invite link the game copies. `minutes` sets the round length, `teams`
+  // makes it a Team Battle.
+  createRoom(rec, { minutes, teams = false } = {}) {
+    const plan = withOptions(rec, { minutes, teams }, this.cfg.game.timer);
     return this.#run(async () => {
       if (!this.isAlive() || !this.atMenu) await this.#loadMenu();
       this.atMenu = false;
@@ -192,6 +202,7 @@ export class Host extends EventEmitter {
         }
         const bad = linkMismatches(url, this.cfg.game.expectLinkParams);
         if (minutes != null && linkMinutes(url) !== minutes) bad.push(`round=${linkMinutes(url)} min (expected ${minutes})`);
+        if (linkTeams(url) !== teams) bad.push(`teams=${linkTeams(url)} (expected ${teams})`);
         if (bad.length) wrongSettings = `Room has the wrong settings: ${bad.join(', ')}`;
         else link = url;
       };
@@ -248,6 +259,29 @@ export class Host extends EventEmitter {
       }
       await this.screenshot(`start-fail-${Date.now()}`);
       throw new Error('The round did not start');
+    });
+  }
+
+  // The game kicks idle players, and the host's kart is one. A short steering
+  // tap now and then keeps it in the room.
+  nudge() {
+    return this.#run(async () => {
+      if (!this.isAlive()) return;
+      for (const key of ['ArrowLeft', 'ArrowRight']) {
+        await this.page.keyboard.down(key);
+        await sleep(120);
+        await this.page.keyboard.up(key);
+      }
+    });
+  }
+
+  // True when the main menu shows (the first step of the recording), i.e. the
+  // bot is no longer in a room.
+  showsMainMenu(rec) {
+    return this.#run(async () => {
+      if (!this.isAlive()) return false;
+      const match = { minSimilarity: this.cfg.replay.minSimilarity, maxDiff: this.cfg.replay.visualThreshold };
+      return looksLike(await this.page.screenshot(), rec.steps[0], this.cfg.browser.viewport, match).matched;
     });
   }
 

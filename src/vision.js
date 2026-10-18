@@ -77,3 +77,56 @@ export function patchMatch(pngA, pngB, { minSimilarity, maxDiff }) {
   const diff = patchDiff(pngA, pngB);
   return { matched: diff <= maxDiff, score: `diff ${diff.toFixed(1)}` };
 }
+
+// Finds where `template` (a PNG patch) best matches inside a full-viewport PNG,
+// by luminance correlation: a coarse scan every `stride` px, then a 1 px
+// refinement around the best spot. Returns { x, y, similarity } (x, y = centre).
+export function findPatch(fullPng, template, { stride = 4, region } = {}) {
+  const full = PNG.sync.read(fullPng);
+  const tpl = PNG.sync.read(template);
+  const W = full.width;
+  const lum = new Float32Array(full.width * full.height);
+  for (let i = 0; i < lum.length; i++) lum[i] = 0.299 * full.data[i * 4] + 0.587 * full.data[i * 4 + 1] + 0.114 * full.data[i * 4 + 2];
+  const tw = tpl.width;
+  const th = tpl.height;
+  const n = tw * th;
+  const t = new Float32Array(n);
+  for (let i = 0; i < n; i++) t[i] = 0.299 * tpl.data[i * 4] + 0.587 * tpl.data[i * 4 + 1] + 0.114 * tpl.data[i * 4 + 2];
+  const tMean = t.reduce((s, v) => s + v, 0) / n;
+  let tVar = 0;
+  for (let i = 0; i < n; i++) { t[i] -= tMean; tVar += t[i] * t[i]; }
+
+  const score = (left, top) => {
+    let sum = 0;
+    let sumSq = 0;
+    let dot = 0;
+    for (let r = 0; r < th; r++) {
+      const row = (top + r) * W + left;
+      for (let c = 0; c < tw; c++) {
+        const v = lum[row + c];
+        sum += v;
+        sumSq += v * v;
+        dot += v * t[r * tw + c];
+      }
+    }
+    const varI = sumSq - (sum * sum) / n;
+    return varI > 1e-6 && tVar > 1e-6 ? dot / Math.sqrt(varI * tVar) : -1;
+  };
+
+  const { x0 = 0, y0 = 0, x1 = full.width, y1 = full.height } = region ?? {};
+  let best = { left: 0, top: 0, s: -2 };
+  for (let top = y0; top + th <= y1; top += stride) {
+    for (let left = x0; left + tw <= x1; left += stride) {
+      const s = score(left, top);
+      if (s > best.s) best = { left, top, s };
+    }
+  }
+  const coarse = best;
+  for (let top = Math.max(y0, coarse.top - stride); top <= Math.min(y1 - th, coarse.top + stride); top++) {
+    for (let left = Math.max(x0, coarse.left - stride); left <= Math.min(x1 - tw, coarse.left + stride); left++) {
+      const s = score(left, top);
+      if (s > best.s) best = { left, top, s };
+    }
+  }
+  return { x: best.left + Math.floor(tw / 2), y: best.top + Math.floor(th / 2), similarity: best.s };
+}

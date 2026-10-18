@@ -8,9 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Host, extractLink, linkMinutes } from '../src/host.js';
+import { Host, extractLink, linkMinutes, linkTeams } from '../src/host.js';
 import { RoomManager } from '../src/roomManager.js';
-import { addTimerStep, startRecording } from '../src/recorder.js';
+import { addOptionSteps, startRecording } from '../src/recorder.js';
 import { cropPng, patchClip } from '../src/vision.js';
 
 const FIXTURE = pathToFileURL(path.resolve(import.meta.dirname, 'fixtures/fake-game.html')).href;
@@ -31,6 +31,7 @@ function makeConfig(tmp, query) {
       recordingFile: path.join(tmp, 'create.json'),
       expectLinkParams: { arena: 'smashisland', wpns: '256' },
       timer: { options: [3, 6, 10, 20], startMinutes: 3, defaultMinutes: 10, arrow: { x: 740, y: 150 } },
+      teamsBox: { x: 330, y: 430, maxDiff: 8 },
       menuTimeoutMs: 30_000,
       menuSettleMs: 300,
       linkTimeoutMs: 5_000,
@@ -70,8 +71,8 @@ async function recordHumanRun(tmp) {
   await host.close();
   assert.equal(rec.steps.length, 5);
   assert.ok(rec.steps.every((s) => s.type === 'click' && s.patch), 'every click has a screen patch');
-  assert.ok(addTimerStep(rec, cfg.game.timer.arrow), 'timer step added');
-  assert.deepEqual(rec.steps.map((s) => s.type), ['click', 'click', 'click', 'timer', 'click', 'click']);
+  assert.ok(addOptionSteps(rec, { timerArrow: cfg.game.timer.arrow, teamsBox: cfg.game.teamsBox }), 'option steps added');
+  assert.deepEqual(rec.steps.map((s) => s.type), ['click', 'click', 'click', 'timer', 'teams', 'click', 'click']);
   return rec;
 }
 
@@ -92,6 +93,7 @@ test('record a human run, then replay it on a slower load with round lengths', {
 
   // Two friends send @game at the same time: one room, same link, default 10 min.
   const [a, b] = await Promise.all([rooms.getLink(), rooms.getLink()]);
+  assert.equal(linkTeams(a.link), false);
   assert.equal(a.link, b.link);
   assert.equal(linkMinutes(a.link), 10);
   assert.equal(a.minutes, 10);
@@ -100,13 +102,18 @@ test('record a human run, then replay it on a slower load with round lengths', {
     { screen: 'lobby', mode: 'nukes', map: 'smash', wasted: 0 });
 
   // A plain @game reuses the live room; "@game 10" too.
-  assert.deepEqual(await rooms.getLink(), { link: a.link, minutes: 10, reused: true });
-  assert.deepEqual(await rooms.getLink(10, true), { link: a.link, minutes: 10, reused: true });
+  const reused = { link: a.link, minutes: 10, teams: false, reused: true };
+  assert.deepEqual(await rooms.getLink(), reused);
+  assert.deepEqual(await rooms.getLink({ minutes: 10, teams: false, explicit: true }), reused);
 
   // "@game 20" asks for another length: a new room with 20 min rounds.
-  const c = await rooms.getLink(20, true);
+  const c = await rooms.getLink({ minutes: 20, teams: false, explicit: true });
   assert.equal(c.reused, false);
   assert.equal(linkMinutes(c.link), 20);
+
+  // "@game 6 team": a new Team Battle room with 6 min rounds.
+  const d = await rooms.getLink({ minutes: 6, teams: true, explicit: true });
+  assert.deepEqual({ reused: d.reused, minutes: linkMinutes(d.link), teams: linkTeams(d.link) }, { reused: false, minutes: 6, teams: true });
   fake = await host.page.evaluate(() => window.__fake);
   assert.equal(fake.wastedClicks, 0);
 });
@@ -179,6 +186,26 @@ test('a recording that never reaches the copy button fails cleanly with a screen
     return true;
   });
   assert.equal(rooms.state, 'idle');
+});
+
+test('an unknown nag popup is closed by its close button before the first click', { skip, timeout: 120_000 }, async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const rec = await recordHumanRun(tmp);
+  const cfg = makeConfig(tmp, 'load=2000&room=1000&popup=1');
+  const host = new Host(cfg, quietLog);
+  t.after(() => host.close());
+  await host.loadMenu();
+  await host.page.waitForFunction(() => window.__fake.screen === 'menu' && window.__fake.popup);
+  // Not a known popup: only the look of a close button is given.
+  rec.popups = [];
+  rec.closeButton = { name: 'any close button', patch: cropPng(await host.page.screenshot(), patchClip(950, 130, cfg.browser.viewport)).toString('base64') };
+  fs.writeFileSync(cfg.game.recordingFile, JSON.stringify(rec));
+
+  const { link } = await new RoomManager(host, cfg, quietLog).getLink();
+  assert.equal(linkMinutes(link), 10);
+  const fake = await host.page.evaluate(() => window.__fake);
+  assert.deepEqual({ popup: fake.popup, screen: fake.screen, wasted: fake.wastedClicks }, { popup: false, screen: 'lobby', wasted: 0 });
 });
 
 test('@start closes the pause menu, starts the round, and knows when one runs', { skip, timeout: 120_000 }, async (t) => {

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { cropPng, patchClip, patchMatch } from './vision.js';
+import { cropPng, findPatch, patchClip, patchMatch } from './vision.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -17,22 +17,30 @@ export async function loadRecording(file) {
   return rec;
 }
 
-// Expands the recording's { type: 'timer' } step into presses of the Round
-// Timer arrow. The game offers lengths that cycle (3 -> 6 -> 10 -> 20 -> 3)
-// and a freshly loaded page always starts at timer.startMinutes; the invite
-// link is checked afterwards, so a miscount can never reach the group.
-export function withTimer(rec, minutes, timer) {
-  const at = rec.steps.findIndex((s) => s.type === 'timer');
+// Expands the recording's option steps for one room:
+//  - { type: 'timer' } -> presses of the Round Timer arrow. The game offers
+//    lengths that cycle (3 -> 6 -> 10 -> 20 -> 3) and a freshly loaded page
+//    always starts at timer.startMinutes.
+//  - { type: 'teams' } -> a click on the (unticked) Teams box, or nothing.
+// The invite link is checked afterwards, so a miscount never reaches the group.
+export function withOptions(rec, { minutes, teams = false } = {}, timer) {
   const want = minutes ?? timer.startMinutes;
   const to = timer.options.indexOf(want);
   if (to < 0) throw new Error(`Round length must be one of ${timer.options.join(', ')} minutes`);
   const presses = (to - timer.options.indexOf(timer.startMinutes) + timer.options.length) % timer.options.length;
-  if (at < 0 || !rec.timer) {
-    if (presses > 0) throw new Error('The recording has no round-timer step; run "npm run calibrate" again');
-    return rec;
-  }
-  const arrow = { type: 'click', x: rec.timer.x, y: rec.timer.y, patch: rec.timer.patch, holdMs: 80, waitBeforeMs: 800 };
-  return { ...rec, steps: [...rec.steps.slice(0, at), ...Array.from({ length: presses }, () => ({ ...arrow })), ...rec.steps.slice(at + 1)] };
+  const recalibrate = (what) => new Error(`The recording has no ${what} step; run "npm run calibrate" again`);
+  if (presses > 0 && !(rec.timer && rec.steps.some((s) => s.type === 'timer'))) throw recalibrate('round-timer');
+  if (teams && !(rec.teamsBox && rec.steps.some((s) => s.type === 'teams'))) throw recalibrate('teams');
+
+  const steps = rec.steps.flatMap((s) => {
+    if (s.type === 'timer') {
+      const arrow = { type: 'click', x: rec.timer.x, y: rec.timer.y, patch: rec.timer.patch, holdMs: 80, waitBeforeMs: 800 };
+      return Array.from({ length: presses }, () => ({ ...arrow }));
+    }
+    if (s.type === 'teams') return teams ? [{ type: 'click', holdMs: 80, waitBeforeMs: 800, ...rec.teamsBox }] : [];
+    return [s];
+  });
+  return { ...rec, steps };
 }
 
 // Replays a calibrated recording. Before each click it hovers the target and,
@@ -45,6 +53,11 @@ export function withTimer(rec, minutes, timer) {
 // wrong thing could build a wrong room), otherwise it clicks anyway.
 // While waiting, known popups (rec.popups: a close button and its snapshot,
 // e.g. the game's "Check out our NEW GAME" promo) are closed when they show.
+// The game also rotates nag screens over its menu (promos, "Sign In"); their
+// close buttons all look alike (0.90-0.99 similar), so while waiting for the
+// first step (the bare main menu) any close button found on screen
+// (rec.closeButton) is clicked too. Later steps have close buttons of their
+// own dialogs, so this only runs before the first click.
 export async function replay(page, rec, opts) {
   const {
     speed, minGapMs, maxGapMs, visualCheck, strictVisual, minSimilarity, visualThreshold,
@@ -86,7 +99,7 @@ export async function replay(page, rec, opts) {
     const y = step.y * sy;
     await page.mouse.move(x, y, { steps: 4 });
     if (checks && step.patch) {
-      const r = await waitForPatch(page, step, rec.viewport, match, timeoutFor(i), shouldStop, popups, onPopup);
+      const r = await waitForPatch(page, step, rec.viewport, match, timeoutFor(i), shouldStop, popups, onPopup, i === 0 ? rec.closeButton : null);
       await page.mouse.move(x, y); // a closed popup may have moved the pointer
       if (shouldStop()) return;
       if (r.matched) log.info(`Step ${i + 1}: matched (${r.score})`);
@@ -119,8 +132,10 @@ export async function click(page, step) {
 // Chromium relayout the page, and Unity then drops or misplaces the next
 // click (seen on the real game: Create ignored, a dialog closed by its own
 // button). Full screenshots between clicks leave input alone.
+// A snapshot may carry its own maxDiff: the Teams box, plain white either way,
+// is 27.6 apart ticked vs unticked (hovered unticked: 10), under the general limit.
 export const looksLike = (shot, step, viewport, match) =>
-  patchMatch(cropPng(shot, patchClip(step.x, step.y, viewport)), Buffer.from(step.patch, 'base64'), match);
+  patchMatch(cropPng(shot, patchClip(step.x, step.y, viewport)), Buffer.from(step.patch, 'base64'), { ...match, maxDiff: step.maxDiff ?? match.maxDiff });
 
 // Clicks the close button of the first known popup on screen. Returns true if it did.
 async function closePopup(page, shot, popups, viewport, match, onPopup) {
@@ -133,14 +148,29 @@ async function closePopup(page, shot, popups, viewport, match, onPopup) {
   return true;
 }
 
-async function waitForPatch(page, step, viewport, match, timeoutMs, shouldStop, popups, onPopup) {
+const ANY_CLOSE_MIN_SIMILARITY = 0.85; // close buttons 0.90-0.99, bare menu best 0.63
+
+// Clicks whatever close button is on screen. Returns true if it did.
+async function closeAnyButton(page, shot, closeButton, onPopup) {
+  const hit = findPatch(shot, Buffer.from(closeButton.patch, 'base64'));
+  if (hit.similarity < ANY_CLOSE_MIN_SIMILARITY) return false;
+  onPopup({ name: `close button at (${hit.x}, ${hit.y}), similarity ${hit.similarity.toFixed(2)}` });
+  await page.mouse.move(hit.x, hit.y);
+  await click(page, hit);
+  await sleep(1500);
+  return true;
+}
+
+async function waitForPatch(page, step, viewport, match, timeoutMs, shouldStop, popups, onPopup, closeButton) {
   const deadline = Date.now() + timeoutMs;
   let last = { matched: false, score: 'no check' };
   while (Date.now() < deadline && !shouldStop()) {
     const shot = await page.screenshot();
     last = looksLike(shot, step, viewport, match);
     if (last.matched) return last;
-    if (!(await closePopup(page, shot, popups, viewport, match, onPopup))) await sleep(250);
+    if (await closePopup(page, shot, popups, viewport, match, onPopup)) continue;
+    if (closeButton && (await closeAnyButton(page, shot, closeButton, onPopup))) continue;
+    await sleep(250);
   }
   return last;
 }

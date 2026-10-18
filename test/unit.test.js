@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
 import { parseCommand } from '../src/whatsapp.js';
 import { cropPng, patchClip, patchDiff, patchMatch, patchSimilarity } from '../src/vision.js';
-import { extractLink, linkMinutes, linkMismatches } from '../src/host.js';
-import { parseMinutes } from '../src/roomManager.js';
-import { withTimer } from '../src/replay.js';
+import { extractLink, linkMinutes, linkMismatches, linkTeams } from '../src/host.js';
+import { parseGameArgs } from '../src/roomManager.js';
+import { withOptions } from '../src/replay.js';
 
 test('parseCommand matches the trigger only at the start', () => {
   assert.equal(parseCommand('@game', '@game'), '');
@@ -104,30 +104,45 @@ test('linkMinutes reads the round length from the real game links', () => {
 
 const TIMER = { options: [3, 6, 10, 20], startMinutes: 3, defaultMinutes: 10, arrow: { x: 873, y: 250 } };
 
-test('parseMinutes: default, explicit lengths and bad input', () => {
-  assert.deepEqual(parseMinutes('', TIMER), { minutes: 10, explicit: false });
-  assert.deepEqual(parseMinutes('20', TIMER), { minutes: 20, explicit: true });
-  assert.deepEqual(parseMinutes('6 min', TIMER), { minutes: 6, explicit: true });
-  assert.deepEqual(parseMinutes('20mins pls', TIMER), { minutes: 20, explicit: true });
-  assert.match(parseMinutes('15', TIMER).error, /3, 6, 10, 20 minutes/);
+test('linkTeams reads Team Battle from the real game links', () => {
+  // Captured from the real game on 2026-10-18: FFA 3 min and Team Battle 3 min.
+  assert.equal(linkTeams(URL_), false);
+  assert.equal(linkTeams('https://smashkarts.io/link/?mode=67109642&wpns=8547820&room=in356500&arena=skatepark&mdfrs=0'), true);
+  assert.equal(linkMinutes('https://smashkarts.io/link/?mode=67109642&wpns=8547820&room=in356500&arena=skatepark&mdfrs=0'), 3);
 });
 
-test('withTimer turns the timer step into the right number of arrow presses', () => {
+test('parseGameArgs: default, lengths, team flag and bad input', () => {
+  assert.deepEqual(parseGameArgs('', TIMER), { minutes: 10, teams: false, explicit: false });
+  assert.deepEqual(parseGameArgs('20', TIMER), { minutes: 20, teams: false, explicit: true });
+  assert.deepEqual(parseGameArgs('6 min', TIMER), { minutes: 6, teams: false, explicit: true });
+  assert.deepEqual(parseGameArgs('team', TIMER), { minutes: 10, teams: true, explicit: true });
+  assert.deepEqual(parseGameArgs('20 Teams', TIMER), { minutes: 20, teams: true, explicit: true });
+  assert.deepEqual(parseGameArgs('teams 3', TIMER), { minutes: 3, teams: true, explicit: true });
+  assert.deepEqual(parseGameArgs('steam', TIMER), { minutes: 10, teams: false, explicit: false });
+  assert.match(parseGameArgs('15 team', TIMER).error, /3, 6, 10, 20 minutes/);
+});
+
+test('withOptions expands timer presses and the teams click', () => {
   const rec = {
     viewport: { width: 1280, height: 720 },
     timer: { x: 873, y: 250, patch: 'P' },
-    steps: [{ type: 'click', x: 1, y: 1 }, { type: 'timer' }, { type: 'click', x: 2, y: 2 }],
+    teamsBox: { x: 493, y: 557, maxDiff: 8, patch: 'T' },
+    steps: [{ type: 'click', x: 1, y: 1 }, { type: 'timer' }, { type: 'teams' }, { type: 'click', x: 2, y: 2 }],
   };
-  const presses = (m) => withTimer(rec, m, TIMER).steps.filter((s) => s.x === 873).length;
-  assert.equal(presses(3), 0);
-  assert.equal(presses(6), 1);
-  assert.equal(presses(10), 2);
-  assert.equal(presses(20), 3);
-  assert.equal(presses(undefined), 0);
-  assert.equal(withTimer(rec, 10, TIMER).steps.length, 4);
-  assert.ok(!withTimer(rec, 10, TIMER).steps.some((s) => s.type === 'timer'));
-  assert.throws(() => withTimer(rec, 15, TIMER), /3, 6, 10, 20/);
+  const presses = (o) => withOptions(rec, o, TIMER).steps.filter((s) => s.x === 873).length;
+  assert.equal(presses({ minutes: 3 }), 0);
+  assert.equal(presses({ minutes: 6 }), 1);
+  assert.equal(presses({ minutes: 10 }), 2);
+  assert.equal(presses({ minutes: 20 }), 3);
+  assert.equal(presses({}), 0);
+  const team = withOptions(rec, { minutes: 3, teams: true }, TIMER).steps;
+  assert.deepEqual(team.map((s) => s.x), [1, 493, 2]);
+  assert.equal(team[1].maxDiff, 8);
+  assert.deepEqual(withOptions(rec, { minutes: 3 }, TIMER).steps.map((s) => s.x), [1, 2]);
+  assert.ok(!withOptions(rec, { minutes: 20, teams: true }, TIMER).steps.some((s) => s.type !== 'click'));
+  assert.throws(() => withOptions(rec, { minutes: 15 }, TIMER), /3, 6, 10, 20/);
   const old = { viewport: rec.viewport, steps: [{ type: 'click', x: 1, y: 1 }] };
-  assert.equal(withTimer(old, 3, TIMER), old);
-  assert.throws(() => withTimer(old, 10, TIMER), /calibrate/);
+  assert.deepEqual(withOptions(old, { minutes: 3 }, TIMER).steps, old.steps);
+  assert.throws(() => withOptions(old, { minutes: 10 }, TIMER), /round-timer/);
+  assert.throws(() => withOptions(old, { minutes: 3, teams: true }, TIMER), /teams/);
 });

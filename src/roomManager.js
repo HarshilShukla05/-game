@@ -1,13 +1,15 @@
 import { loadRecording } from './replay.js';
 
-// "@game", "@game 20", "@game 20 min" -> round length. Explicit means the
-// asker named a length; a live room with another length is then replaced.
-export function parseMinutes(args, timer) {
-  const m = String(args ?? '').match(/\d+/);
-  if (!m) return { minutes: timer.defaultMinutes, explicit: false };
-  const minutes = Number(m[0]);
-  if (!timer.options.includes(minutes)) return { error: `Round length can be ${timer.options.join(', ')} minutes.` };
-  return { minutes, explicit: true };
+// "@game", "@game 20", "@game team", "@game 20 teams" -> room options.
+// Explicit means the asker named an option; a live room that differs is then
+// replaced, while a plain "@game" just gets the live room's link.
+export function parseGameArgs(args, timer) {
+  const text = String(args ?? '');
+  const teams = /\bteams?\b/i.test(text);
+  const m = text.match(/\d+/);
+  const minutes = m ? Number(m[0]) : timer.defaultMinutes;
+  if (m && !timer.options.includes(minutes)) return { error: `Round length can be ${timer.options.join(', ')} minutes.` };
+  return { minutes, teams, explicit: Boolean(m) || teams };
 }
 
 // One room at a time. States: idle -> creating -> live -> idle.
@@ -24,9 +26,10 @@ export class RoomManager {
     this.state = 'idle';
     this.link = null;
     this.minutes = null;
+    this.teams = false;
     this.createdAt = 0;
     this.inflight = null;
-    this.inflightMinutes = null;
+    this.inflightKey = null;
     this.ttlTimer = null;
 
     host.on('lost', (reason) => {
@@ -36,25 +39,27 @@ export class RoomManager {
     });
   }
 
-  async getLink(minutes = this.cfg.game.timer.defaultMinutes, explicit = false) {
+  // `req` = { minutes, teams, explicit } from parseGameArgs.
+  async getLink(req = { minutes: this.cfg.game.timer.defaultMinutes, teams: false, explicit: false }) {
+    const key = `${req.minutes}/${req.teams}`;
     while (this.inflight) {
-      if (!explicit || this.inflightMinutes === minutes) return this.inflight;
+      if (!req.explicit || this.inflightKey === key) return this.inflight;
       await this.inflight.catch(() => {});
     }
     if (this.state === 'live' && this.host.isAlive()) {
-      if (!explicit || this.minutes === minutes) {
+      if (!req.explicit || (this.minutes === req.minutes && this.teams === req.teams)) {
         this.#armTtl();
-        this.log.event('room_reused', { link: this.link, minutes: this.minutes });
-        return { link: this.link, minutes: this.minutes, reused: true };
+        this.log.event('room_reused', { link: this.link, minutes: this.minutes, teams: this.teams });
+        return { link: this.link, minutes: this.minutes, teams: this.teams, reused: true };
       }
-      await this.close(`replaced by a ${minutes} min room`);
+      await this.close(`replaced by a ${req.minutes} min${req.teams ? ' team' : ''} room`);
     }
-    this.inflightMinutes = minutes;
-    this.inflight = this.#create(minutes).finally(() => { this.inflight = null; });
+    this.inflightKey = key;
+    this.inflight = this.#create(req.minutes, req.teams).finally(() => { this.inflight = null; });
     return this.inflight;
   }
 
-  async #create(minutes) {
+  async #create(minutes, teams) {
     this.state = 'creating';
     try {
       const rec = await loadRecording(this.cfg.game.recordingFile);
@@ -63,14 +68,15 @@ export class RoomManager {
       for (let attempt = 1; attempt <= attempts; attempt++) {
         const t0 = Date.now();
         try {
-          const link = await this.host.createRoom(rec, { minutes });
+          const link = await this.host.createRoom(rec, { minutes, teams });
           this.state = 'live';
           this.link = link;
           this.minutes = minutes;
+          this.teams = teams;
           this.createdAt = Date.now();
           this.#armTtl();
-          this.log.event('room_created', { link, minutes, ms: Date.now() - t0, attempt });
-          return { link, minutes, reused: false };
+          this.log.event('room_created', { link, minutes, teams, ms: Date.now() - t0, attempt });
+          return { link, minutes, teams, reused: false };
         } catch (err) {
           lastErr = err;
           const shot = await this.host.screenshot(`fail-${Date.now()}-attempt${attempt}`);
@@ -96,6 +102,13 @@ export class RoomManager {
     this.state = 'idle';
     this.link = null;
     this.minutes = null;
+  }
+
+  // The bot was dropped from its room (e.g. kicked): forget the dead link.
+  markLost(reason) {
+    if (this.state !== 'live') return;
+    this.log.event('room_closed', { reason, livedMs: Date.now() - this.createdAt });
+    this.#toIdle();
   }
 
   // Returns 'started' or 'already running'.

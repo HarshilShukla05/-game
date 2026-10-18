@@ -67,15 +67,18 @@ export function startRecording(host, viewport, log) {
   };
 }
 
-// The bot sets the round length itself, right before Play: the second-to-last
-// click of a recording (Play, then Copy Link). Inserts a { type: 'timer' } step
-// there and cuts the Round Timer arrow's snapshot from the frame before Play.
+// The bot sets room options itself, right before Play: the second-to-last
+// click of a recording (Play, then Copy Link). Inserts { type: 'timer' } and
+// { type: 'teams' } steps there and cuts the Round Timer arrow's and the
+// (unticked) Teams box's snapshots from the frame before Play.
 // Returns false when that frame is missing.
-export function addTimerStep(rec, arrow) {
+export function addOptionSteps(rec, { timerArrow, teamsBox }) {
   const clicks = rec.steps.filter((s) => s.type === 'click');
   const play = clicks[clicks.length - 2];
   if (!play?.frame) return false;
-  rec.steps.splice(rec.steps.indexOf(play), 0, { type: 'timer' });
-  rec.timer = { ...arrow, patch: cropPng(play.frame, patchClip(arrow.x, arrow.y, rec.viewport)).toString('base64') };
+  const cut = ({ x, y }) => cropPng(play.frame, patchClip(x, y, rec.viewport)).toString('base64');
+  rec.steps.splice(rec.steps.indexOf(play), 0, { type: 'timer' }, { type: 'teams' });
+  rec.timer = { ...timerArrow, patch: cut(timerArrow) };
+  rec.teamsBox = { ...teamsBox, patch: cut(teamsBox) };
   return true;
 }
