@@ -11,6 +11,7 @@ export function loadConfig(file = process.env.BOT_CONFIG || path.join(ROOT, 'con
   const abs = (p) => (p ? path.resolve(ROOT, p) : p);
   cfg.whatsapp.authDir = abs(cfg.whatsapp.authDir);
   cfg.browser.profileDir = abs(cfg.browser.profileDir);
+  cfg.browser.executablePath = cfg.browser.executablePath || process.env.CHROMIUM_PATH || '';
   cfg.game.recordingFile = abs(cfg.game.recordingFile);
   cfg.dataDir = abs(cfg.dataDir);
   return cfg;

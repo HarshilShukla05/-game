@@ -63,6 +63,8 @@ export class WhatsApp extends EventEmitter {
       syncFullHistory: false,
     });
     this.sock = sock;
+    this.pairingRequested = false;
+    this.registered = Boolean(state.creds.registered);
 
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', (u) => this.#onConnection(sock, u));
@@ -76,7 +78,21 @@ export class WhatsApp extends EventEmitter {
 
   #onConnection(sock, { connection, lastDisconnect, qr }) {
     if (sock !== this.sock) return;
-    if (qr) {
+    // With a pairing number set (WA_PAIRING_NUMBER or whatsapp.pairingNumber),
+    // link by typing a code on the bot phone instead of scanning a QR. Handy
+    // when the only screen you have is that phone.
+    const pairingNumber = String(process.env.WA_PAIRING_NUMBER || this.cfg.pairingNumber || '').replace(/\D/g, '');
+    if (qr && pairingNumber && !this.registered) {
+      if (!this.pairingRequested) {
+        this.pairingRequested = true;
+        sock.requestPairingCode(pairingNumber)
+          .then((code) => {
+            this.log.event('wa_pairing_code', { code });
+            console.log(`\nOn the bot phone: WhatsApp → Linked devices → Link a device → "Link with phone number instead" → enter ${code}\n`);
+          })
+          .catch((err) => this.log.error('Pairing code request failed:', err.message));
+      }
+    } else if (qr) {
       console.log('\nScan with the bot phone: WhatsApp → Linked devices → Link a device\n');
       qrcode.generate(qr, { small: true });
     }

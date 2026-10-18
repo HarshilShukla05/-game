@@ -2,6 +2,7 @@
   "whatsapp": {
     "authDir": "auth",
     "groupIds": [],
+    "pairingNumber": "",
     "trigger": "@game",
     "replyTemplate": "🏎️ Smash Karts: Nukes on Smash Island\n{link}",
     "failureText": "⚠️ Couldn't create the room this time. Try @game again in a minute.",

@@ -64,6 +64,8 @@ npm run start:xvfb   # no monitor / lid closed: virtual display
 ```
 
 1. Scan the QR code with the **bot's phone**: WhatsApp → Linked devices → Link a device.
+   No second screen? Start with `WA_PAIRING_NUMBER=<bot number with country code>`
+   and enter the printed 8-character code under "Link with phone number instead".
 2. Type `@game` in the group. The bot logs the group ID.
 3. Put the ID in `config.json` → `whatsapp.groupIds` to lock the bot to that group.
 
@@ -85,10 +87,11 @@ in `/etc/systemd/logind.conf`, then run `sudo systemctl restart systemd-logind`.
 | Key | Meaning |
 |---|---|
 | `whatsapp.groupIds` | Allowed groups. Empty = setup mode (any group, IDs are logged). |
+| `whatsapp.pairingNumber` | Bot number for code-based linking (or env `WA_PAIRING_NUMBER`). |
 | `whatsapp.trigger` | Command text, default `@game`. |
 | `whatsapp.replyTemplate` | Reply text, `{link}` is replaced. |
 | `whatsapp.sendFailureScreenshot` | Post the failure screenshot to the group. |
-| `browser.channel` / `executablePath` | Use installed Chrome (`"chrome"`) or a specific binary. |
+| `browser.channel` / `executablePath` | Use installed Chrome (`"chrome"`) or a specific binary (or env `CHROMIUM_PATH`). |
 | `game.menuTimeoutMs` | How long to wait for the game to load and connect (default 3 min). |
 | `game.createAttempts` | Full attempts per `@game`, each from a fresh reload. |
 | `game.roomTtlMinutes` | The bot leaves the room this long after the last `@game`. |
