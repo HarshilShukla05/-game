@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import makeWASocket, {
   Browsers,
   DisconnectReason,
@@ -99,14 +100,21 @@ export class WhatsApp extends EventEmitter {
     }
     if (connection === 'open') {
       this.retries = 0;
+      this.registered = true;
       this.log.event('wa_connected');
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) {
-        this.log.error(`WhatsApp logged out. Delete "${this.cfg.authDir}" and restart to scan a new QR.`);
+      if (code === DisconnectReason.loggedOut && this.registered) {
+        this.log.error(`WhatsApp logged out. Delete "${this.cfg.authDir}" and restart to link again.`);
         this.emit('fatal', new Error('logged out'));
         return;
+      }
+      if (code === DisconnectReason.loggedOut) {
+        // A pairing that was never completed (code or QR not used in time)
+        // leaves half-made credentials that WhatsApp rejects. Start over.
+        this.log.warn('Linking was not completed in time; starting over with a new code');
+        fs.rmSync(this.cfg.authDir, { recursive: true, force: true });
       }
       const delay = Math.min(60_000, 2_000 * 2 ** this.retries++);
       this.log.event('wa_disconnected', { code, retryInMs: delay });
