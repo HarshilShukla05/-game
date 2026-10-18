@@ -98,11 +98,13 @@ export class RoomManager {
     this.minutes = null;
   }
 
+  // Returns 'started' or 'already running'.
   async startRound() {
     if (this.state !== 'live') throw new Error('No room is live');
-    await this.host.startRound();
+    const result = await this.host.startRound(await loadRecording(this.cfg.game.recordingFile));
     this.#armTtl();
-    this.log.event('round_started', { link: this.link });
+    this.log.event('round_started', { link: this.link, result });
+    return result;
   }
 
   async close(reason) {

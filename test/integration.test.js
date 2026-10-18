@@ -180,3 +180,33 @@ test('a recording that never reaches the copy button fails cleanly with a screen
   });
   assert.equal(rooms.state, 'idle');
 });
+
+test('@start closes the pause menu, starts the round, and knows when one runs', { skip, timeout: 120_000 }, async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const rec = await recordHumanRun(tmp);
+  const cfg = makeConfig(tmp, 'load=1000&room=500&pause=1');
+  const vp = cfg.browser.viewport;
+  const host = new Host(cfg, quietLog);
+  t.after(() => host.close());
+  const rooms = new RoomManager(host, cfg, quietLog);
+  // No lobby snapshots yet: create the room, then learn them from the screen.
+  rec.lobby = { overlays: [], roundStarted: { name: 'clock', x: 660, y: 35, patch: '' } };
+  fs.writeFileSync(cfg.game.recordingFile, JSON.stringify(rec));
+  await rooms.getLink();
+  await host.page.waitForFunction(() => window.__fake.paused);
+  const cut = async (x, y) => cropPng(await host.page.screenshot(), patchClip(x, y, vp)).toString('base64');
+  const resume = { name: 'Resume', x: 980, y: 330, patch: await cut(980, 330) };
+  // Learn the clock by drawing the round state for a moment, then restore the
+  // paused lobby. (The Host closes extra tabs, so no second page.)
+  await host.page.evaluate(() => { window.__fake.screen = 'round'; draw(); }); // eslint-disable-line no-undef
+  const clock = { name: 'clock', x: 660, y: 35, patch: await cut(660, 35) };
+  await host.page.evaluate(() => { window.__fake.screen = 'lobby'; draw(); }); // eslint-disable-line no-undef
+  rec.lobby = { overlays: [resume], roundStarted: clock };
+  fs.writeFileSync(cfg.game.recordingFile, JSON.stringify(rec));
+
+  assert.equal(await rooms.startRound(), 'started');
+  const fake = await host.page.evaluate(() => window.__fake);
+  assert.deepEqual({ screen: fake.screen, paused: fake.paused }, { screen: 'round', paused: false });
+  assert.equal(await rooms.startRound(), 'already running');
+});

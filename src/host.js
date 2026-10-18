@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { pageHooks, inputRecorder } from './hooks.js';
-import { replay, withTimer } from './replay.js';
+import { click, looksLike, replay, withTimer } from './replay.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -85,6 +85,7 @@ export class Host extends EventEmitter {
         '--mute-audio',
         '--ignore-gpu-blocklist',
         '--enable-unsafe-swiftshader', // software WebGL fallback when there is no GPU (e.g. under Xvfb)
+        '--hide-crash-restore-bubble', // it steals keyboard focus from the game
         `--window-size=${width + 40},${height + 160}`,
       ],
     });
@@ -104,6 +105,11 @@ export class Host extends EventEmitter {
     // Ads sometimes open new tabs; keep the single game tab focused.
     context.on('page', (p) => { if (p !== this.page) p.close().catch(() => {}); });
     this.crashed = false;
+    // The game opens its pause menu when the page loses focus (seen on the
+    // real game: a browser bubble took focus and Space no longer started the
+    // round). Focus emulation makes the page always believe it has focus.
+    this.cdp = await context.newCDPSession(this.page);
+    await this.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     if (this.record) this.#logGameConsole(this.page);
     this.page.on('crash', () => { this.crashed = true; this.#markLost('page crashed'); });
   }
@@ -211,11 +217,37 @@ export class Host extends EventEmitter {
     });
   }
 
-  // The room host has to start each round; the lobby says "Press Space to start round".
-  startRound() {
+  // The room host has to start each round; the lobby says "Press Space to start
+  // round". rec.lobby holds snapshots (from the real game) of what can block
+  // that key, the share box and the pause menu, and of the round clock that
+  // shows once a round runs. Returns 'started' or 'already running'.
+  startRound(rec) {
     return this.#run(async () => {
       if (!this.isAlive()) throw new Error('The game is not running');
-      await this.page.keyboard.press('Space');
+      const { overlays, roundStarted } = rec.lobby;
+      const vp = this.cfg.browser.viewport;
+      const match = { minSimilarity: this.cfg.replay.minSimilarity, maxDiff: this.cfg.replay.visualThreshold };
+      const clockShows = async () => looksLike(await this.page.screenshot(), roundStarted, vp, match).matched;
+      if (await clockShows()) return 'already running';
+
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        for (let closed = 0; closed < 4; closed++) {
+          const shot = await this.page.screenshot();
+          const overlay = overlays.find((o) => looksLike(shot, o, vp, match).matched);
+          if (!overlay) break;
+          this.log.info(`Closing "${overlay.name}" before starting the round`);
+          await this.page.mouse.move(overlay.x, overlay.y);
+          await click(this.page, overlay);
+          await sleep(1200);
+        }
+        await this.page.keyboard.press('Space');
+        for (const deadline = Date.now() + 8_000; Date.now() < deadline; await sleep(400)) {
+          if (await clockShows()) return 'started';
+        }
+        this.log.warn(`Round did not start after Space (attempt ${attempt})`);
+      }
+      await this.screenshot(`start-fail-${Date.now()}`);
+      throw new Error('The round did not start');
     });
   }
 

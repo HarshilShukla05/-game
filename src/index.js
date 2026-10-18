@@ -45,8 +45,9 @@ wa.on('command', async ({ name, jid, msg, sender, args }) => {
 // The room host has to start every round, and the bot is the host.
 async function startRound(jid, msg) {
   try {
-    await rooms.startRound();
-    await wa.react(jid, msg.key, '🏁');
+    const result = await rooms.startRound();
+    if (result === 'already running') await wa.reply(jid, '🏁 A round is already running.', msg);
+    else await wa.react(jid, msg.key, '🏁');
   } catch (err) {
     log.error('Start failed:', err.message);
     await wa.reply(jid, rooms.state === 'live' ? `⚠️ Couldn't start the round: ${err.message}` : `No room yet. Send ${cfg.whatsapp.trigger} first.`, msg)

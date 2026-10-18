@@ -14,7 +14,9 @@
 // fires early (at half the load time) while an in-canvas "Loading…" screen
 // is still up. ?room=ms is how long the "server" takes to create the room.
 // ?popup=1 shows a promo popup over the menu, closed by its X (like the
-// real game's "Check out our NEW GAME").
+// real game's "Check out our NEW GAME"). ?pause=1 opens a pause menu right
+// after the invite link is copied; while it is up, Space does not start the
+// round (seen on the real game). A started round shows a clock.
 var loadingState = 'None';
 function updateLoadingState(n) { loadingState = n; }
 function onLoadingToMainMenuComplete(n) {}
@@ -45,7 +47,7 @@ function shareText() {
 
 var c = document.getElementById('gameCanvas');
 var g = c.getContext('2d');
-window.__fake = { screen: 'loading', mode: null, map: null, timer: 0, popup: params.get('popup') === '1', wastedClicks: 0 };
+window.__fake = { screen: 'loading', mode: null, map: null, timer: 0, popup: params.get('popup') === '1', paused: false, wastedClicks: 0 };
 
 var BUTTONS = {
   menu: [{ id: 'create', x: 540, y: 360, w: 200, h: 80, color: '#ff7a00', label: 'CREATE' }],
@@ -76,6 +78,16 @@ function draw() {
     g.fillStyle = '#fff'; g.font = '28px sans-serif';
     g.fillText(TIMER_OPTIONS[window.__fake.timer] + ' min', 520, 162);
   }
+  if (s === 'lobby') { g.fillStyle = '#fff'; g.font = '28px sans-serif'; g.fillText('Press Space to start round', 450, 700); }
+  if (s === 'round') {
+    g.fillStyle = '#ffffff'; g.fillRect(600, 10, 120, 50);
+    g.fillStyle = '#000'; g.font = '26px sans-serif'; g.fillText('⏱ 600', 615, 45);
+  }
+  if (s === 'lobby' && window.__fake.paused) {
+    g.fillStyle = '#0b3d91'; g.fillRect(860, 260, 240, 140);
+    g.fillStyle = '#ff9900'; g.fillRect(900, 300, 160, 60);
+    g.fillStyle = '#fff'; g.font = '24px sans-serif'; g.fillText('RESUME', 935, 340);
+  }
   if (s === 'menu' && window.__fake.popup) {
     g.fillStyle = '#7b2cbf'; g.fillRect(300, 100, 680, 550);
     g.fillStyle = '#fff'; g.font = '40px sans-serif'; g.fillText('NEW GAME!', 520, 380);
@@ -94,7 +106,10 @@ function hit(x, y) {
 // other buttons act on release.
 c.addEventListener('pointerdown', function (e) {
   var b = hit(e.offsetX, e.offsetY);
-  if (b && b.id === 'copy') window.copyText(shareText());
+  if (b && b.id === 'copy') {
+    window.copyText(shareText());
+    if (params.get('pause') === '1') setTimeout(function () { window.__fake.paused = true; draw(); }, 500);
+  }
 });
 c.addEventListener('pointerup', function (e) {
   var f = window.__fake;
@@ -102,6 +117,11 @@ c.addEventListener('pointerup', function (e) {
     // Only the popup's X works while it is up.
     if (e.offsetX >= 930 && e.offsetX <= 970 && e.offsetY >= 110 && e.offsetY <= 150) f.popup = false;
     else f.wastedClicks++;
+    draw();
+    return;
+  }
+  if (f.screen === 'lobby' && f.paused) {
+    if (e.offsetX >= 900 && e.offsetX <= 1060 && e.offsetY >= 300 && e.offsetY <= 360) f.paused = false;
     draw();
     return;
   }
@@ -116,6 +136,11 @@ c.addEventListener('pointerup', function (e) {
     setTimeout(function () { f.screen = 'lobby'; draw(); }, ROOM_MS);
   }
   draw();
+});
+
+document.addEventListener('keydown', function (e) {
+  var f = window.__fake;
+  if (e.code === 'Space' && f.screen === 'lobby' && !f.paused) { f.screen = 'round'; draw(); }
 });
 
 draw();

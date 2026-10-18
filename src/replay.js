@@ -109,7 +109,7 @@ export async function replay(page, rec, opts) {
   }
 }
 
-async function click(page, step) {
+export async function click(page, step) {
   await page.mouse.down();
   await sleep(clamp(step.holdMs ?? 80, 40, 400));
   await page.mouse.up();
@@ -119,7 +119,7 @@ async function click(page, step) {
 // Chromium relayout the page, and Unity then drops or misplaces the next
 // click (seen on the real game: Create ignored, a dialog closed by its own
 // button). Full screenshots between clicks leave input alone.
-const looksLike = (shot, step, viewport, match) =>
+export const looksLike = (shot, step, viewport, match) =>
   patchMatch(cropPng(shot, patchClip(step.x, step.y, viewport)), Buffer.from(step.patch, 'base64'), match);
 
 // Clicks the close button of the first known popup on screen. Returns true if it did.
