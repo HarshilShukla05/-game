@@ -71,7 +71,9 @@ export function linkMismatches(link, expected = {}) {
 // serialized through one queue, so a reset can never interleave with a create.
 //
 // Events: 'menuReady', 'copy' (text), 'input' (calibration), 'net' (frames,
-// with { capture: true }), 'lost' (browser or page died; any live room is gone).
+// with { capture: true }), 'roomSocket' ('open' | 'close', code: the
+// connection to the room's game server), 'lost' (browser or page died; any
+// live room is gone).
 export class Host extends EventEmitter {
   #queue = Promise.resolve();
   #pending = 0;
@@ -165,6 +167,7 @@ export class Host extends EventEmitter {
     else if (e.type === 'loadingState') this.log.event('loading_state', { value: e.value });
     else if (e.type === 'input') this.emit('input', e);
     else if (e.type === 'net' && Array.isArray(e.frames)) this.emit('net', e.frames);
+    else if (e.type === 'roomSocket') this.emit('roomSocket', e.state, e.code);
   }
 
   // Resolves true when `event` fires (and passes `filter`), false on timeout.

@@ -25,6 +25,11 @@ export class RoomManager {
       this.log.event('room_closed', { reason: `host lost: ${reason}`, livedMs: Date.now() - this.createdAt });
       this.#toIdle();
     });
+    // Seen on the real game: after 81 min the room server dropped the
+    // connection (code 1006) and the game went back to loading, room gone.
+    host.on('roomSocket', (state, code) => {
+      if (state === 'close') this.markLost(`room server connection closed (${code})`);
+    });
   }
 
   // `req` = { minutes, teams, arena, weapons, explicit } from parseGameArgs;
