@@ -1,18 +1,26 @@
 # Smash Karts WhatsApp bot
 
 Someone types `@game` in the friends' WhatsApp group. The bot hosts a Smash Karts
-private room (Nukes only, Smash Island, region India) in a real browser and
-replies with the invite link. On a phone, the link opens the Smash Karts app.
+private room (by default Nukes only, Smash Island, region India) in a real
+browser and replies with the invite link. On a phone, the link opens the Smash
+Karts app.
 
 | Command | What happens |
 |---|---|
-| `@game` | Room with 10 min rounds (or the live room's link again). |
-| `@game 20` | Room with 20 min rounds. Lengths: 3, 6, 10, 20. A live room with another length is replaced. |
+| `@game` | Room with the defaults: Nukes only, Smash Island, Free For All, 10 min rounds (or the live room's link again). |
+| `@game 20` | Room with 20 min rounds. Lengths: 3, 6, 10, 20. |
+| `@game team` | Team Battle. |
+| `@game tunnels` | Any of the 30 arenas, or `random`. Full names or a part only one arena has: `sky arena tunnels`, `tunnels`, `island`, `old graveyard`. |
+| `@game nuke mines` / `@game all` | One or more of the 12 weapons, or all of them. Plurals and short names work: `nukes`, `gun`, `spikes`. |
+| `@game 20 team tunnels nuke mines` | Everything together, in any order. A live room with other settings is replaced. |
+| `@game help` | Lists the arenas and weapons. |
 | `@start` | Starts the round. The host must start each round, and the bot is the host. |
 
 Verified on the real game (smashkarts.io 2.16.007): rooms made on the first
 attempt, about 65-80 s each in a cloud sandbox without a GPU, with links
-checked for arena, weapons and round length.
+checked for arena, weapons and round length. On 2.16.008, arenas from both ends
+of the list (Toxic Towers, The Sand Box, SnowparkCTF, Boneyard Basin, Sky Arena
+Tunnels, Random) with one to all twelve weapons: about 85-130 s each.
 
 ```
 WhatsApp group ──@game──▶ whatsapp.js (Baileys) ──▶ roomManager.js ──▶ host.js (Playwright Chromium)
@@ -23,10 +31,17 @@ WhatsApp group ──@game──▶ whatsapp.js (Baileys) ──▶ roomManager.
 - **Link capture:** the game copies its invite link with a page function,
   `window.copyText(link)`. The bot hooks that function, so it gets the exact
   text without OCR or clipboard access.
-- **Room check:** the invite link encodes the room's settings
-  (`arena=smashisland`, `wpns=256` for Nukes only, round minutes in bits 8-15
-  of `mode`). The bot checks every link before posting it, so a misclick that
-  builds a wrong room fails the attempt instead of reaching the group.
+- **Room check:** the invite link encodes the room's settings (`wpns` is a
+  bitmask of the weapons, e.g. 256 for Nukes only; round minutes in bits 8-15
+  of `mode`; Team Battle in bit 1), and the copied share message names the
+  arena (`Arena: Sky Arena - Tunnels`). The bot checks every room before
+  posting it, so a misclick that builds a wrong room fails the attempt instead
+  of reaching the group.
+- **Arenas and weapons:** `recordings/create.json` holds a snapshot of every
+  weapon tile (switched off) and arena tile, cut from the real game. The
+  recording's `weapons` step becomes clicks on the chosen tiles (each checked
+  to have switched on), or on "All ON"; its `arena` step scrolls the arena
+  list (sorted by name) to the end that shows the tile, then clicks it.
 - **Clicks:** the game is one WebGL canvas with no DOM buttons. You record your
   clicks once (`npm run calibrate`) and the bot replays them. Each recorded
   click also stores a 40×40 snapshot of what was under the cursor, cut from the
@@ -118,12 +133,12 @@ in `/etc/systemd/logind.conf`, then run `sudo systemctl restart systemd-logind`.
 | `whatsapp.groupIds` | Allowed groups. Empty = setup mode (any group, IDs are logged). |
 | `whatsapp.pairingNumber` | Bot number for code-based linking (or env `WA_PAIRING_NUMBER`). |
 | `whatsapp.trigger` / `startTrigger` | Command texts, default `@game` and `@start`. |
-| `whatsapp.replyTemplate` | Reply text, `{link}` is replaced. |
+| `whatsapp.replyTemplate` | Reply text with `{link}`, `{weapons}`, `{arena}`, `{format}`, `{minutes}`. |
 | `whatsapp.sendFailureScreenshot` | Post the failure screenshot to the group. |
 | `browser.channel` / `executablePath` | Use installed Chrome (`"chrome"`) or a specific binary (or env `CHROMIUM_PATH`). |
 | `game.menuTimeoutMs` | How long to wait for the game to load and connect (default 3 min). |
 | `game.createAttempts` | Full attempts per `@game`, each from a fresh reload. |
-| `game.expectLinkParams` | Link params every room must have (arena, weapons). |
+| `game.defaults` | Arena and weapons when `@game` names none (names as in the recording's tiles). |
 | `game.timer` | Round lengths the game cycles through, the default, and the ▶ arrow position. |
 | `game.photonPort443` | Moves Photon WebSockets to port 443 (env `SK_PHOTON_PORT_443=1`). Only for networks that block port 19093, e.g. the cloud sandbox. |
 | `replay.strictVisual` | Fail instead of clicking when a spot never looks as recorded. |

@@ -5,7 +5,7 @@
     "pairingNumber": "",
     "trigger": "@game",
     "startTrigger": "@start",
-    "replyTemplate": "🏎️ Smash Karts: Nukes on Smash Island, {format}, {minutes} min rounds\n{link}",
+    "replyTemplate": "🏎️ Smash Karts: {weapons} on {arena}, {format}, {minutes} min rounds\n{link}",
     "failureText": "⚠️ Couldn't create the room this time. Try @game again in a minute.",
     "sendFailureScreenshot": true
   },
@@ -19,7 +19,7 @@
     "url": "https://smashkarts.io/",
     "photonPort443": false,
     "recordingFile": "recordings/create.json",
-    "expectLinkParams": { "arena": "smashisland", "wpns": "256" },
+    "defaults": { "arena": "Smash Island", "weapons": ["Nuke"] },
     "timer": { "options": [3, 6, 10, 20], "startMinutes": 3, "defaultMinutes": 10, "arrow": { "x": 873, "y": 250 } },
     "teamsBox": { "x": 493, "y": 557, "maxDiff": 15 },
     "menuTimeoutMs": 180000,

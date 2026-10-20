@@ -1,5 +1,7 @@
 // Records one human run through the menus (Create → Nukes → Smash Island →
 // create → copy invite link) and saves it as the recording the bot replays.
+// The hand-cut sections of the previous recording (popups, lobby, region,
+// weapon and arena tiles) are kept.
 // Recording starts once the game reports its menu, and stops by itself when
 // the game copies the invite link. Ctrl+C aborts without saving.
 import fs from 'node:fs/promises';
@@ -47,6 +49,12 @@ const rec = await recording.finish({ sampleLink: link });
 
 if (!addOptionSteps(rec, { timerArrow: cfg.game.timer.arrow, teamsBox: cfg.game.teamsBox })) {
   log.warn('Could not capture the Round Timer arrow and Teams box; only 3 min free-for-all rooms will work.');
+}
+const KEPT = ['popups', 'closeButton', 'lobby', 'region', 'weapons', 'arenas'];
+const prev = await fs.readFile(cfg.game.recordingFile, 'utf8').then(JSON.parse).catch(() => null);
+for (const key of KEPT) if (prev?.[key]) rec[key] = prev[key];
+if (rec.weapons || rec.arenas) {
+  log.warn('Weapon and arena choices need the Nuke and Smash Island clicks replaced by { "type": "weapons" } and { "type": "arena" } steps in the saved file; until then every room gets the recorded ones.');
 }
 await fs.mkdir(path.dirname(cfg.game.recordingFile), { recursive: true });
 await fs.writeFile(cfg.game.recordingFile, JSON.stringify(rec, null, 2) + '\n');

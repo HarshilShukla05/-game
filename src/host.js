@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { pageHooks, inputRecorder } from './hooks.js';
+import { squash } from './options.js';
 import { click, looksLike, replay, waitForMenu, withOptions } from './replay.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -34,8 +35,26 @@ export function linkTeams(link) {
   }
 }
 
+// The share message names the arena: "Arena: Sky Arena - Tunnels".
+export function sharedArena(text) {
+  const m = String(text ?? '').match(/^\s*Arena:\s*(.+?)\s*$/im);
+  return m ? m[1] : null;
+}
+
+// The link's `wpns` is a bitmask of the allowed weapons (Nuke only: 256).
+// Null when a weapon's bit is not known.
+export function weaponMask(tiles, weapons) {
+  let mask = 0;
+  for (const name of weapons) {
+    const bit = tiles.find((t) => t.name === name)?.bit;
+    if (bit == null) return null;
+    mask += 2 ** bit;
+  }
+  return mask;
+}
+
 // The invite link encodes the room's settings. Returns what differs from
-// `expected` (e.g. { arena: 'smashisland', wpns: '256' }); empty means it matches.
+// `expected` (e.g. { wpns: '256' }); empty means it matches.
 export function linkMismatches(link, expected = {}) {
   let params;
   try {
@@ -182,9 +201,14 @@ export class Host extends EventEmitter {
 
   // Replays the "create room" recording from a fresh main menu and returns
   // the invite link the game copies. `minutes` sets the round length, `teams`
-  // makes it a Team Battle.
-  createRoom(rec, { minutes, teams = false } = {}) {
-    const plan = withOptions(rec, { minutes, teams }, this.cfg.game.timer);
+  // makes it a Team Battle, `arena` and `weapons` (names of the recording's
+  // tiles) pick the arena and the allowed weapons.
+  createRoom(rec, { minutes, teams = false, arena, weapons } = {}) {
+    const plan = withOptions(rec, { minutes, teams, arena, weapons }, this.cfg.game.timer);
+    const expected = {};
+    const mask = weapons && weaponMask(rec.weapons?.tiles ?? [], weapons);
+    if (mask != null) expected.wpns = String(mask);
+    else if (weapons) this.log.warn(`Weapon bits unknown for ${weapons.join(', ')}; not checking them`);
     return this.#run(async () => {
       if (!this.isAlive() || !this.atMenu) await this.#loadMenu();
       this.atMenu = false;
@@ -201,7 +225,10 @@ export class Host extends EventEmitter {
           this.log.warn(`Game copied text without a link: ${JSON.stringify(text)}`);
           return;
         }
-        const bad = linkMismatches(url, this.cfg.game.expectLinkParams);
+        const bad = linkMismatches(url, expected);
+        // A random arena is named after the one the game drew.
+        const shown = sharedArena(text) ?? new URL(url).searchParams.get('arena');
+        if (arena && arena !== 'Random' && squash(shown) !== squash(arena)) bad.push(`arena=${shown} (expected ${arena})`);
         if (minutes != null && linkMinutes(url) !== minutes) bad.push(`round=${linkMinutes(url)} min (expected ${minutes})`);
         if (linkTeams(url) !== teams) bad.push(`teams=${linkTeams(url)} (expected ${teams})`);
         if (bad.length) wrongSettings = `Room has the wrong settings: ${bad.join(', ')}`;

@@ -1,7 +1,8 @@
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { Host } from './host.js';
-import { RoomManager, parseGameArgs } from './roomManager.js';
+import { RoomManager } from './roomManager.js';
+import { arenaText, helpText, parseGameArgs, weaponsText } from './options.js';
 import { loadRecording } from './replay.js';
 import { WhatsApp } from './whatsapp.js';
 
@@ -18,18 +19,31 @@ process.on('unhandledRejection', (err) => log.error('Unhandled rejection:', err)
 wa.on('command', async ({ name, jid, msg, sender, args }) => {
   log.event('command', { name, jid, sender, args });
   if (name === 'start') return startRound(jid, msg);
-  const ask = parseGameArgs(args, cfg.game.timer);
-  if (ask.error) {
-    await wa.reply(jid, `⚠️ ${ask.error} Example: ${cfg.whatsapp.trigger} 20 team`, msg).catch((err) => log.error('Reply failed:', err.message));
+  const trigger = cfg.whatsapp.trigger;
+  let catalog;
+  try {
+    const rec = await loadRecording(cfg.game.recordingFile);
+    catalog = { arenas: rec.arenas?.tiles ?? [], weapons: rec.weapons?.tiles ?? [] };
+  } catch (err) {
+    log.error('Cannot read the recording:', err.message);
+    return;
+  }
+  const ask = parseGameArgs(args, { timer: cfg.game.timer, defaults: cfg.game.defaults, ...catalog });
+  if (ask.help || ask.error) {
+    const text = ask.help ? helpText({ ...catalog, defaults: cfg.game.defaults, timer: cfg.game.timer, trigger })
+      : `⚠️ ${ask.error} Send "${trigger} help" for the options. Example: ${trigger} 20 team tunnels`;
+    await wa.reply(jid, text, msg).catch((err) => log.error('Reply failed:', err.message));
     return;
   }
   await wa.react(jid, msg.key, '⏳');
   try {
-    const { link, minutes, teams } = await rooms.getLink(ask);
+    const { link, minutes, teams, arena, weapons } = await rooms.getLink(ask);
     const text = cfg.whatsapp.replyTemplate
       .replace('{link}', link)
       .replace('{minutes}', minutes)
-      .replace('{format}', teams ? 'Team Battle' : 'Free For All');
+      .replace('{format}', teams ? 'Team Battle' : 'Free For All')
+      .replace('{arena}', arenaText(arena))
+      .replace('{weapons}', weaponsText(weapons, catalog.weapons));
     await wa.reply(jid, text, msg);
     await wa.react(jid, msg.key, '✅');
   } catch (err) {

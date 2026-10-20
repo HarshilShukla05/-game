@@ -4,6 +4,10 @@ import { cropPng, findPatch, patchClip, patchMatch } from './vision.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// Unity reads the pointer once per frame (a few fps on software WebGL). A
+// button only clicks when the pointer is over it at both press and release,
+// so after moving onto or off a target the pointer stays put this long.
+const SETTLE_MS = 400;
 
 export async function loadRecording(file) {
   let rec;
@@ -22,8 +26,15 @@ export async function loadRecording(file) {
 //    lengths that cycle (3 -> 6 -> 10 -> 20 -> 3) and a freshly loaded page
 //    always starts at timer.startMinutes.
 //  - { type: 'teams' } -> a click on the (unticked) Teams box, or nothing.
+//  - { type: 'weapons' } (in the weapons popup, after "All OFF") -> a click on
+//    each chosen weapon (rec.weapons.tiles), or on "All ON" for all of them.
+//  - { type: 'arena' } (in the arena picker, sorted by name) -> a click on the
+//    arena's tile (rec.arenas.tiles). Each tile was cut from one end of the
+//    list (its top or bottom view), so replay first scrolls that way until
+//    the tile shows: the picker keeps its scroll position between visits.
+// Options the recording has no step for are left to its fixed clicks.
 // The invite link is checked afterwards, so a miscount never reaches the group.
-export function withOptions(rec, { minutes, teams = false } = {}, timer) {
+export function withOptions(rec, { minutes, teams = false, arena, weapons } = {}, timer) {
   const want = minutes ?? timer.startMinutes;
   const to = timer.options.indexOf(want);
   if (to < 0) throw new Error(`Round length must be one of ${timer.options.join(', ')} minutes`);
@@ -32,12 +43,29 @@ export function withOptions(rec, { minutes, teams = false } = {}, timer) {
   if (presses > 0 && !(rec.timer && rec.steps.some((s) => s.type === 'timer'))) throw recalibrate('round-timer');
   if (teams && !(rec.teamsBox && rec.steps.some((s) => s.type === 'teams'))) throw recalibrate('teams');
 
+  const option = { type: 'click', holdMs: 80, waitBeforeMs: 800 };
   const steps = rec.steps.flatMap((s) => {
     if (s.type === 'timer') {
-      const arrow = { type: 'click', x: rec.timer.x, y: rec.timer.y, patch: rec.timer.patch, holdMs: 80, waitBeforeMs: 800 };
+      const arrow = { ...option, x: rec.timer.x, y: rec.timer.y, patch: rec.timer.patch };
       return Array.from({ length: presses }, () => ({ ...arrow }));
     }
-    if (s.type === 'teams') return teams ? [{ type: 'click', holdMs: 80, waitBeforeMs: 800, ...rec.teamsBox }] : [];
+    if (s.type === 'teams') return teams ? [{ ...option, ...rec.teamsBox }] : [];
+    if (s.type === 'weapons') {
+      const { tiles, allOn } = rec.weapons;
+      if (!weapons?.length) throw new Error('No weapons chosen');
+      const chosen = tiles.filter((t) => weapons.includes(t.name));
+      if (chosen.length !== weapons.length) throw new Error(`Unknown weapon in ${weapons.join(', ')}`);
+      if (chosen.length === tiles.length) return [{ ...option, ...allOn }];
+      // A tile toggles: replay checks each one changed from its "off" look,
+      // with the pointer away from it (under the pointer a tile dims).
+      return chosen.map((t) => ({ ...option, waitBeforeMs: 500, toggle: true, rest: rec.weapons.rest, ...t }));
+    }
+    if (s.type === 'arena') {
+      const tile = rec.arenas.tiles.find((t) => t.name === arena);
+      if (!tile) throw new Error(`Unknown arena "${arena}"`);
+      const { x, y, dy } = rec.arenas.scroll;
+      return [{ ...option, ...tile, scroll: { x, y, dy: tile.view === 'bottom' ? dy : -dy } }];
+    }
     return [s];
   });
   return { ...rec, steps };
@@ -97,20 +125,39 @@ export async function replay(page, rec, opts) {
 
     const x = step.x * sx;
     const y = step.y * sy;
-    await page.mouse.move(x, y, { steps: 4 });
+    if (checks && step.patch && step.scroll) {
+      const shown = await scrollTo(page, step, rec.viewport, match, visualTimeoutMs, shouldStop);
+      if (shouldStop()) return;
+      if (!shown) fail(`Step ${i + 1} at (${step.x}, ${step.y}): scrolling never showed it`);
+    }
+    // The pointer waits over the target, or at step.rest while the target is checked.
+    const rest = step.rest ? { x: step.rest.x * sx, y: step.rest.y * sy } : { x, y };
+    await page.mouse.move(rest.x, rest.y, { steps: 4 });
     if (checks && step.patch) {
       const r = await waitForPatch(page, step, rec.viewport, match, timeoutFor(i), shouldStop, popups, onPopup, i === 0 ? rec.closeButton : null);
-      await page.mouse.move(x, y); // a closed popup may have moved the pointer
+      await page.mouse.move(rest.x, rest.y); // a closed popup may have moved the pointer
       if (shouldStop()) return;
       if (r.matched) log.info(`Step ${i + 1}: matched (${r.score})`);
       else fail(`Step ${i + 1} at (${step.x}, ${step.y}): screen never matched the recording (last ${r.score})`);
     }
     await snap(`step${String(i + 1).padStart(2, '0')}-before`);
+    if (step.rest) {
+      await page.mouse.move(x, y, { steps: 4 });
+      await sleep(SETTLE_MS);
+    }
     await sleep(clickDelayMs);
     await click(page, step);
 
+    if (checks && step.patch && step.toggle) {
+      const toggled = await confirmToggle(page, step, { x, y }, rest, rec.viewport, match, visualTimeoutMs, reclickMs, clickDelayMs, shouldStop, async () => {
+        log.warn(`Step ${i + 1}: the toggle did not change, clicking again`);
+      });
+      if (shouldStop()) return;
+      if (!toggled) fail(`Step ${i + 1} at (${step.x}, ${step.y}) never toggled`);
+    }
+
     const next = rec.steps[i + 1];
-    if (checks && step.patch && next?.type === 'click' && next.patch) {
+    if (checks && step.patch && next?.type === 'click' && next.patch && !next.scroll) {
       let reclicks = 0;
       const appeared = await confirmClick(page, step, next, { x, y }, rec.viewport, match, timeoutFor(i), reclickMs, clickDelayMs, shouldStop, popups, onPopup, async () => {
         log.warn(`Step ${i + 1}: the screen did not react, clicking again`);
@@ -136,8 +183,10 @@ export async function click(page, step) {
 // is 27.6 apart ticked vs unticked (hovered unticked: 10), under the general
 // maxDiff; the region badge reads IN or SA in letters too small for the general
 // minSimilarity (IN vs SA 0.87-0.90, IN vs IN 1.00).
+// A snapshot is a square around (x, y) unless it gives its own `clip` (the
+// arena tiles: a larger box, as the small pictures are alike in places).
 export const looksLike = (shot, step, viewport, match) =>
-  patchMatch(cropPng(shot, patchClip(step.x, step.y, viewport)), Buffer.from(step.patch, 'base64'), {
+  patchMatch(cropPng(shot, step.clip ?? patchClip(step.x, step.y, viewport)), Buffer.from(step.patch, 'base64'), {
     minSimilarity: step.minSimilarity ?? match.minSimilarity,
     maxDiff: step.maxDiff ?? match.maxDiff,
   });
@@ -204,6 +253,47 @@ async function confirmClick(page, step, next, at, viewport, match, timeoutMs, re
       await page.mouse.move(at.x, at.y);
       await sleep(clickDelayMs);
       await click(page, step);
+      lastClick = Date.now();
+    }
+    await sleep(250);
+  }
+  return false;
+}
+
+// Scrolls a list (the pointer over step.scroll, dy per wheel event) until
+// `step` shows. The game moves its lists only some pixels per wheel event,
+// however large, so it takes many events with pauses between them.
+async function scrollTo(page, step, viewport, match, timeoutMs, shouldStop) {
+  const { x, y, dy } = step.scroll;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !shouldStop()) {
+    if (looksLike(await page.screenshot(), step, viewport, match).matched) return true;
+    await page.mouse.move(x, y);
+    await page.mouse.wheel(0, dy);
+    await sleep(300);
+  }
+  return false;
+}
+
+// Waits until a toggled spot (e.g. a weapon tile) no longer shows its
+// recorded look; re-clicks (at most every reclickMs) while it still does.
+async function confirmToggle(page, step, at, rest, viewport, match, timeoutMs, reclickMs, clickDelayMs, shouldStop, onReclick) {
+  const deadline = Date.now() + timeoutMs;
+  let lastClick = Date.now();
+  const clickThenRest = async () => {
+    await sleep(SETTLE_MS); // the release must land on the target
+    await page.mouse.move(rest.x, rest.y);
+    await sleep(SETTLE_MS); // and the hover dimming fade
+  };
+  await clickThenRest();
+  while (Date.now() < deadline && !shouldStop()) {
+    if (!looksLike(await page.screenshot(), step, viewport, match).matched) return true;
+    if (Date.now() - lastClick >= reclickMs) {
+      await onReclick();
+      await page.mouse.move(at.x, at.y);
+      await sleep(SETTLE_MS + clickDelayMs);
+      await click(page, step);
+      await clickThenRest();
       lastClick = Date.now();
     }
     await sleep(250);

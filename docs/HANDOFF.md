@@ -6,18 +6,20 @@ decided, so nothing needs re-researching or re-asking.
 ## What the bot does (live-tested with the owner's friends)
 
 In the WhatsApp group "Info alsi", `@game` makes a Smash Karts private room
-(Nukes only, Smash Island, region India) and replies with the invite link,
-which opens the app on phones.
+(region India) and replies with the invite link, which opens the app on phones.
 
 | Command | Room |
 |---|---|
-| `@game` | Free For All, 10 min rounds (a live room's link is resent) |
+| `@game` | Nukes only, Smash Island, Free For All, 10 min rounds (a live room's link is resent) |
 | `@game 20` | 20 min (lengths: 3, 6, 10, 20) |
 | `@game team` / `@game 20 team` | Team Battle |
+| `@game tunnels nuke mines` / `@game random all` | any of the 30 arenas, any weapons (in any order with the above) |
+| `@game help` | lists arenas and weapons |
 | `@start` | starts the round (only the host can, and the bot is the host) |
 
-Every link is checked before it is posted: `arena=smashisland`, `wpns=256`,
-round minutes in bits 8-15 of `mode`, Team Battle in bit 1 of `mode`.
+Every room is checked before it is posted: the weapons in the link's `wpns`
+bitmask, round minutes in bits 8-15 of `mode`, Team Battle in bit 1 of `mode`,
+and the arena named in the game's share message.
 
 The host cannot spectate (no such option for the host), so the bot keeps a
 kart and taps steering every 20 s to avoid the idle kick. It also marks a room

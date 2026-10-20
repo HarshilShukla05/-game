@@ -17,6 +17,10 @@
 // real game's "Check out our NEW GAME"). ?pause=1 opens a pause menu right
 // after the invite link is copied; while it is up, Space does not start the
 // round (seen on the real game). A started round shows a clock.
+// Like the real game, weapons are picked in a popup of toggling tiles (all on
+// at first) and the arena in a list that scrolls only some pixels per wheel
+// event; ?scroll=1 opens that list scrolled to the bottom, as the real one
+// remembers where it was. window.__layout tells tests where the tiles are.
 var loadingState = 'None';
 function updateLoadingState(n) { loadingState = n; }
 function onLoadingToMainMenuComplete(n) {}
@@ -35,31 +39,90 @@ var params = new URLSearchParams(location.search);
 var LOAD_MS = Number(params.get('load') || 1000);
 var ROOM_MS = Number(params.get('room') || 1500);
 var TIMER_OPTIONS = [3, 6, 10, 20];
+var WEAPONS = [
+  { name: 'Rockets', bit: 2, color: '#e63946' }, { name: 'Mines', bit: 5, color: '#2a9d8f' },
+  { name: 'Nuke', bit: 8, color: '#f4a261' }, { name: 'Spikys', bit: 11, color: '#6a4c93' },
+];
+var ARENAS = ['Random', 'Graveyard', 'Kartuga', 'Smash Island', 'Snowpark', 'Space Station', 'The Battle Box', 'Toxic Towers'];
+var LIST = { top: 100, bottom: 600, rowH: 170, tileW: 300, tileH: 150, cols: [300, 700], step: 30 };
+var MAX_SCROLL = Math.ceil(ARENAS.length / 2) * LIST.rowH - (LIST.bottom - LIST.top);
+function weaponRect(i) { return { x: 250 + i * 200, y: 300, w: 150, h: 150 }; }
+function arenaRect(i, scroll) {
+  return { x: LIST.cols[i % 2], y: LIST.top + Math.floor(i / 2) * LIST.rowH - scroll, w: LIST.tileW, h: LIST.tileH };
+}
+var centre = function (r) { return { x: r.x + r.w / 2, y: r.y + r.h / 2 }; };
+window.__layout = {
+  maxScroll: MAX_SCROLL,
+  weapons: WEAPONS.map(function (w, i) { var c = centre(weaponRect(i)); return { name: w.name, bit: w.bit, x: c.x, y: c.y }; }),
+  allOn: { x: 280, y: 590 }, allOff: { x: 480, y: 590 }, select: { x: 980, y: 590 },
+  // Tiles fully shown with the list at its top or its bottom.
+  arenas: ARENAS.map(function (name, i) {
+    var top = arenaRect(i, 0);
+    var view = top.y + top.h <= LIST.bottom ? 'top' : 'bottom';
+    var r = arenaRect(i, view === 'top' ? 0 : MAX_SCROLL);
+    return { name: name, view: view, x: centre(r).x, y: centre(r).y, clip: { x: r.x + 50, y: r.y + 20, width: 200, height: 110 } };
+  }),
+};
 // Like the real game: a share message whose link encodes the room settings.
 function shareText() {
   var f = window.__fake;
   // Like the real game: round minutes in bits 8-15 of mode (3 min -> 67109640).
   var mode = 0x4000008 + (TIMER_OPTIONS[f.timer] << 8) + (f.teams ? 2 : 0);
-  var link = 'https://smashkarts.io/link/?mode=' + mode + '&wpns=' + (f.mode === 'nukes' ? 256 : 4095) +
-    '&room=in123456&arena=' + (f.map === 'smash' ? 'smashisland' : 'random') + '&mdfrs=0';
-  return 'Come play Smash Karts \nRoom: in123456 \n' + link + ' \nArena: Smash Island \nRules: Free For All';
+  var wpns = WEAPONS.reduce(function (m, w, i) { return f.weapons[i] ? m + (1 << w.bit) : m; }, 0);
+  var arena = f.map === 'Random' ? 'Kartuga' : f.map; // the game draws one
+  var link = 'https://smashkarts.io/link/?mode=' + mode + '&wpns=' + wpns +
+    '&room=in123456&arena=' + arena.toLowerCase().replace(/[^a-z]/g, '') + '&mdfrs=0';
+  return 'Come play Smash Karts \nRoom: in123456 \n' + link + ' \nArena: ' + arena + ' \nRules: Free For All';
 }
 
 var c = document.getElementById('gameCanvas');
 var g = c.getContext('2d');
-window.__fake = { screen: 'loading', mode: null, map: null, timer: 0, teams: false, popup: params.get('popup') === '1', paused: false, wastedClicks: 0 };
+window.__fake = {
+  screen: 'loading', weapons: WEAPONS.map(function () { return true; }), map: 'Random', scroll: params.get('scroll') === '1' ? MAX_SCROLL : 0,
+  timer: 0, teams: false, popup: params.get('popup') === '1', paused: false, wastedClicks: 0,
+};
 
 var BUTTONS = {
   menu: [{ id: 'create', x: 540, y: 360, w: 200, h: 80, color: '#ff7a00', label: 'CREATE' }],
   settings: [
     { id: 'timer', x: 700, y: 120, w: 80, h: 60, color: '#3366cc', label: ' >>' },
     { id: 'teams', x: 300, y: 400, w: 60, h: 60, color: '#eeeeee', label: '' },
-    { id: 'nukes', x: 300, y: 250, w: 200, h: 80, color: '#aa2222', label: 'NUKES' },
-    { id: 'smash', x: 780, y: 250, w: 200, h: 80, color: '#2222aa', label: 'SMASH ISLAND' },
+    { id: 'weapons', x: 300, y: 250, w: 200, h: 80, color: '#aa2222', label: 'WEAPONS' },
+    { id: 'arena', x: 780, y: 250, w: 200, h: 80, color: '#2222aa', label: 'ARENA' },
     { id: 'start', x: 540, y: 500, w: 200, h: 80, color: '#22aa22', label: 'CREATE ROOM' },
+  ],
+  weapons: [
+    { id: 'allon', x: 200, y: 560, w: 160, h: 60, color: '#1e90ff', label: 'ALL ON' },
+    { id: 'alloff', x: 400, y: 560, w: 160, h: 60, color: '#1e90ff', label: 'ALL OFF' },
+    { id: 'select', x: 900, y: 560, w: 160, h: 60, color: '#ff9900', label: 'SELECT' },
   ],
   lobby: [{ id: 'copy', x: 540, y: 560, w: 200, h: 80, color: '#ffcc00', label: 'COPY LINK' }],
 };
+
+function drawWeapons() {
+  WEAPONS.forEach(function (w, i) {
+    var r = weaponRect(i);
+    g.fillStyle = w.color; g.fillRect(r.x, r.y, r.w, r.h);
+    g.fillStyle = '#fff'; g.fillRect(r.x + 20 + i * 10, r.y + 20, 40, 60 - i * 10);
+    g.font = '22px sans-serif'; g.fillText(w.name, r.x + 10, r.y + r.h - 12);
+    if (!window.__fake.weapons[i]) {
+      g.strokeStyle = '#8b0000'; g.lineWidth = 14;
+      g.beginPath(); g.moveTo(r.x, r.y); g.lineTo(r.x + r.w, r.y + r.h); g.stroke();
+    }
+  });
+}
+
+function drawArenas() {
+  g.save();
+  g.beginPath(); g.rect(0, LIST.top, 1280, LIST.bottom - LIST.top); g.clip();
+  ARENAS.forEach(function (name, i) {
+    var r = arenaRect(i, window.__fake.scroll);
+    g.fillStyle = 'hsl(' + (i * 45) + ', 70%, 45%)'; g.fillRect(r.x, r.y, r.w, r.h);
+    g.fillStyle = '#fff'; g.fillRect(r.x + 60 + i * 15, r.y + 25, 50, 50);
+    g.font = '26px sans-serif'; g.fillText(name, r.x + 20, r.y + r.h - 20);
+  });
+  g.restore();
+}
 
 function draw() {
   var s = window.__fake.screen;
@@ -68,8 +131,10 @@ function draw() {
   g.fillStyle = '#fff'; g.font = '32px sans-serif';
   if (s === 'loading') g.fillText('Loading…', 40, 680);
   if (s === 'creating') g.fillText('Creating room…', 40, 680);
+  if (s === 'weapons') drawWeapons();
+  if (s === 'arena') drawArenas();
   (BUTTONS[s] || []).forEach(function (b) {
-    var selected = (b.id === 'nukes' && window.__fake.mode === 'nukes') || (b.id === 'smash' && window.__fake.map === 'smash');
+    var selected = false;
     if (b.id === 'teams') {
       g.fillStyle = '#ffffff'; g.fillRect(b.x, b.y, b.w, b.h);
       if (window.__fake.teams) { g.fillStyle = '#1e90ff'; g.font = '44px sans-serif'; g.fillText('✓', b.x + 12, b.y + 46); }
@@ -102,11 +167,18 @@ function draw() {
   }
 }
 
+function inside(r, x, y) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
 function hit(x, y) {
-  return (BUTTONS[window.__fake.screen] || []).find(function (b) {
-    return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
-  });
+  return (BUTTONS[window.__fake.screen] || []).find(function (b) { return inside(b, x, y); });
 }
+
+// Like the real game's lists: a few pixels per wheel event, however large.
+c.addEventListener('wheel', function (e) {
+  var f = window.__fake;
+  if (f.screen !== 'arena') return;
+  f.scroll = Math.max(0, Math.min(MAX_SCROLL, f.scroll + (e.deltaY > 0 ? LIST.step : -LIST.step)));
+  draw();
+});
 
 // Like Unity: a press on the copy button copies right away (pointerdown);
 // other buttons act on release.
@@ -131,13 +203,25 @@ c.addEventListener('pointerup', function (e) {
     draw();
     return;
   }
+  if (f.screen === 'weapons') {
+    var wi = WEAPONS.findIndex(function (w, i) { return inside(weaponRect(i), e.offsetX, e.offsetY); });
+    if (wi >= 0) { f.weapons[wi] = !f.weapons[wi]; draw(); return; }
+  }
+  if (f.screen === 'arena') {
+    var ai = e.offsetY >= LIST.top && e.offsetY <= LIST.bottom
+      ? ARENAS.findIndex(function (a, i) { return inside(arenaRect(i, f.scroll), e.offsetX, e.offsetY); }) : -1;
+    if (ai < 0) { f.wastedClicks++; return; }
+    f.map = ARENAS[ai]; f.screen = 'settings'; draw(); return;
+  }
   var b = hit(e.offsetX, e.offsetY);
   if (!b) { f.wastedClicks++; return; }
   if (b.id === 'create') f.screen = 'settings';
   else if (b.id === 'timer') f.timer = (f.timer + 1) % TIMER_OPTIONS.length;
   else if (b.id === 'teams') f.teams = !f.teams;
-  else if (b.id === 'nukes') f.mode = 'nukes';
-  else if (b.id === 'smash') f.map = 'smash';
+  else if (b.id === 'weapons') f.screen = 'weapons';
+  else if (b.id === 'allon' || b.id === 'alloff') f.weapons = WEAPONS.map(function () { return b.id === 'allon'; });
+  else if (b.id === 'select') f.screen = 'settings';
+  else if (b.id === 'arena') f.screen = 'arena';
   else if (b.id === 'start') {
     f.screen = 'creating';
     setTimeout(function () { f.screen = 'lobby'; draw(); }, ROOM_MS);

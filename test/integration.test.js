@@ -15,6 +15,7 @@ import { cropPng, patchClip } from '../src/vision.js';
 
 const FIXTURE = pathToFileURL(path.resolve(import.meta.dirname, 'fixtures/fake-game.html')).href;
 const LINK = 'https://smashkarts.io/link/?mode=67109640&wpns=256&room=in123456&arena=smashisland&mdfrs=0';
+const ALL = ['Rockets', 'Mines', 'Nuke', 'Spikys'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const quietLog = { info() {}, warn() {}, error() {}, event() {} };
 
@@ -29,7 +30,7 @@ function makeConfig(tmp, query) {
     game: {
       url: `${FIXTURE}?${query}`,
       recordingFile: path.join(tmp, 'create.json'),
-      expectLinkParams: { arena: 'smashisland', wpns: '256' },
+      defaults: { arena: 'Smash Island', weapons: ['Nuke'] },
       timer: { options: [3, 6, 10, 20], startMinutes: 3, defaultMinutes: 10, arrow: { x: 740, y: 150 } },
       teamsBox: { x: 330, y: 430, maxDiff: 8 },
       menuTimeoutMs: 30_000,
@@ -45,14 +46,45 @@ function makeConfig(tmp, query) {
 
 const HUMAN_CLICKS = [
   [640, 400], // CREATE
-  [400, 290], // NUKES
-  [880, 290], // SMASH ISLAND
+  [400, 290], // WEAPONS
+  [480, 590], // ALL OFF
+  [725, 375], // the Nuke tile
+  [980, 590], // SELECT
+  [880, 290], // ARENA
+  [850, 345], // the Smash Island tile
   [640, 540], // CREATE ROOM
   [640, 600], // COPY LINK (only appears after the "server" creates the room)
 ];
 
+// Cuts the weapon and arena tiles from the fake's screens, as was done for the
+// real game: the weapons all off, the arena list at its top and its bottom.
+async function learnChoices(host, rec) {
+  const layout = await host.page.evaluate(() => window.__layout);
+  const show = (state) => host.page.evaluate((st) => { Object.assign(window.__fake, st); draw(); }, state); // eslint-disable-line no-undef
+  const cut = (png, clip) => cropPng(png, clip).toString('base64');
+  const vp = rec.viewport;
+  await show({ screen: 'weapons', weapons: ALL.map(() => false) });
+  const off = await host.page.screenshot();
+  rec.weapons = {
+    allOn: { name: 'All ON', ...layout.allOn, patch: cut(off, patchClip(layout.allOn.x, layout.allOn.y, vp)) },
+    rest: { x: 640, y: 200 },
+    tiles: layout.weapons.map((w) => ({ ...w, minSimilarity: 0.95, patch: cut(off, patchClip(w.x, w.y, vp)) })),
+  };
+  const views = {};
+  for (const [view, scroll] of [['top', 0], ['bottom', layout.maxScroll]]) {
+    await show({ screen: 'arena', scroll });
+    views[view] = await host.page.screenshot();
+  }
+  rec.arenas = {
+    scroll: { x: 640, y: 350, dy: 400 },
+    tiles: layout.arenas.map((a) => ({ ...a, minSimilarity: 0.85, patch: cut(views[a.view], a.clip) })),
+  };
+}
+
 // A "human" waits for the real menu, clicks through once and the recording
-// is finished the way calibrate.js does it (timer step inserted before Play).
+// is finished the way it was for the real game: option steps for the timer
+// and teams before Play, the Nuke and Smash Island clicks turned into
+// weapon and arena choices.
 async function recordHumanRun(tmp) {
   const cfg = makeConfig(tmp, 'load=1500&room=1000');
   const host = new Host(cfg, quietLog, { record: true });
@@ -68,24 +100,28 @@ async function recordHumanRun(tmp) {
   assert.equal(extractLink(await copied), LINK);
   await sleep(300);
   const rec = await recording.finish({ sampleLink: LINK });
-  await host.close();
-  assert.equal(rec.steps.length, 5);
+  assert.equal(rec.steps.length, 9);
   assert.ok(rec.steps.every((s) => s.type === 'click' && s.patch), 'every click has a screen patch');
   assert.ok(addOptionSteps(rec, { timerArrow: cfg.game.timer.arrow, teamsBox: cfg.game.teamsBox }), 'option steps added');
-  assert.deepEqual(rec.steps.map((s) => s.type), ['click', 'click', 'click', 'timer', 'teams', 'click', 'click']);
+  rec.steps[3] = { type: 'weapons' };
+  rec.steps[6] = { type: 'arena' };
+  await learnChoices(host, rec);
+  await host.close();
+  assert.deepEqual(rec.steps.map((s) => s.type), ['click', 'click', 'click', 'weapons', 'click', 'click', 'arena', 'timer', 'teams', 'click', 'click']);
   return rec;
 }
 
 const skip = process.env.DISPLAY ? false : 'needs a display (run under xvfb-run)';
 
-test('record a human run, then replay it on a slower load with round lengths', { skip, timeout: 180_000 }, async (t) => {
+test('record a human run, then replay it on a slower load with every option', { skip, timeout: 240_000 }, async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skbot-'));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   const rec = await recordHumanRun(tmp);
 
   // Replay on a much slower load and slower room creation than recorded:
-  // the visual check must wait instead of wasting clicks.
-  const cfg = makeConfig(tmp, 'load=8000&room=4000');
+  // the visual check must wait instead of wasting clicks. The arena list
+  // starts at its bottom, so the top-view tile needs a scroll up.
+  const cfg = makeConfig(tmp, 'load=8000&room=4000&scroll=1');
   fs.writeFileSync(cfg.game.recordingFile, JSON.stringify(rec));
   const host = new Host(cfg, quietLog);
   t.after(() => host.close());
@@ -97,14 +133,15 @@ test('record a human run, then replay it on a slower load with round lengths', {
   assert.equal(a.link, b.link);
   assert.equal(linkMinutes(a.link), 10);
   assert.equal(a.minutes, 10);
+  assert.equal(a.link, LINK.replace('mode=67109640', 'mode=67111432'));
   let fake = await host.page.evaluate(() => window.__fake);
-  assert.deepEqual({ screen: fake.screen, mode: fake.mode, map: fake.map, wasted: fake.wastedClicks },
-    { screen: 'lobby', mode: 'nukes', map: 'smash', wasted: 0 });
+  assert.deepEqual({ screen: fake.screen, weapons: fake.weapons, map: fake.map, wasted: fake.wastedClicks },
+    { screen: 'lobby', weapons: [false, false, true, false], map: 'Smash Island', wasted: 0 });
 
-  // A plain @game reuses the live room; "@game 10" too.
-  const reused = { link: a.link, minutes: 10, teams: false, reused: true };
+  // A plain @game reuses the live room; "@game 10 nuke" too.
+  const reused = { link: a.link, minutes: 10, teams: false, arena: 'Smash Island', weapons: ['Nuke'], reused: true };
   assert.deepEqual(await rooms.getLink(), reused);
-  assert.deepEqual(await rooms.getLink({ minutes: 10, teams: false, explicit: true }), reused);
+  assert.deepEqual(await rooms.getLink({ minutes: 10, weapons: ['Nuke'], explicit: true }), reused);
 
   // "@game 20" asks for another length: a new room with 20 min rounds.
   const c = await rooms.getLink({ minutes: 20, teams: false, explicit: true });
@@ -116,6 +153,17 @@ test('record a human run, then replay it on a slower load with round lengths', {
   assert.deepEqual({ reused: d.reused, minutes: linkMinutes(d.link), teams: linkTeams(d.link) }, { reused: false, minutes: 6, teams: true });
   fake = await host.page.evaluate(() => window.__fake);
   assert.equal(fake.wastedClicks, 0);
+
+  // "@game toxic rockets mines": a tile at the bottom of the list, two weapons.
+  const e = await rooms.getLink({ arena: 'Toxic Towers', weapons: ['Rockets', 'Mines'], explicit: true });
+  assert.match(e.link, /wpns=36&.*arena=toxictowers/);
+  assert.deepEqual({ arena: e.arena, weapons: e.weapons }, { arena: 'Toxic Towers', weapons: ['Rockets', 'Mines'] });
+
+  // "@game random all": All ON; the game names the arena it drew.
+  const f = await rooms.getLink({ arena: 'Random', weapons: ALL, explicit: true });
+  assert.match(f.link, /wpns=2340&/);
+  fake = await host.page.evaluate(() => window.__fake);
+  assert.deepEqual({ weapons: fake.weapons, map: fake.map, wasted: fake.wastedClicks }, { weapons: [true, true, true, true], map: 'Random', wasted: 0 });
 });
 
 test('a known popup over the menu is closed and the room still gets made', { skip, timeout: 120_000 }, async (t) => {
@@ -148,12 +196,13 @@ test('a room with the wrong settings is rejected, not posted', { skip, timeout: 
   cfg.game.createAttempts = 1;
   cfg.game.timer.defaultMinutes = 3; // hand-made recording without a timer step
   cfg.replay.visualCheck = false;
-  // Skips the NUKES button: the game still creates a room and copies a link,
-  // but with all weapons on.
-  const clicks = [[640, 400], [880, 290], [640, 540], [640, 600]];
+  // Never opens the weapons or arena choice: the game still creates a room
+  // and copies a link, but with all weapons on a random arena.
+  const clicks = [[640, 400], [640, 540], [640, 600]];
   fs.writeFileSync(cfg.game.recordingFile, JSON.stringify({
     viewport: cfg.browser.viewport,
-    steps: clicks.map(([x, y], i) => ({ type: 'click', x, y, holdMs: 60, waitBeforeMs: i === 3 ? 2_000 : 300 })),
+    weapons: { tiles: [{ name: 'Nuke', bit: 8 }] },
+    steps: clicks.map(([x, y], i) => ({ type: 'click', x, y, holdMs: 60, waitBeforeMs: i === 2 ? 2_000 : 300 })),
   }));
 
   const host = new Host(cfg, quietLog);
@@ -161,7 +210,7 @@ test('a room with the wrong settings is rejected, not posted', { skip, timeout: 
   const rooms = new RoomManager(host, cfg, quietLog);
   await host.loadMenu();
   await host.page.waitForFunction(() => window.__fake.screen === 'menu');
-  await assert.rejects(rooms.getLink(), /wrong settings: wpns=4095 \(expected 256\)/);
+  await assert.rejects(rooms.getLink(), /wrong settings: wpns=2340 \(expected 256\), arena=Kartuga \(expected Smash Island\)/);
   assert.equal(rooms.state, 'idle');
 });
 

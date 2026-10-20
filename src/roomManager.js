@@ -1,20 +1,9 @@
 import { loadRecording } from './replay.js';
-
-// "@game", "@game 20", "@game team", "@game 20 teams" -> room options.
-// Explicit means the asker named an option; a live room that differs is then
-// replaced, while a plain "@game" just gets the live room's link.
-export function parseGameArgs(args, timer) {
-  const text = String(args ?? '');
-  const teams = /\bteams?\b/i.test(text);
-  const m = text.match(/\d+/);
-  const minutes = m ? Number(m[0]) : timer.defaultMinutes;
-  if (m && !timer.options.includes(minutes)) return { error: `Round length can be ${timer.options.join(', ')} minutes.` };
-  return { minutes, teams, explicit: Boolean(m) || teams };
-}
+import { roomKey } from './options.js';
 
 // One room at a time. States: idle -> creating -> live -> idle.
 //  - @game while live      -> same link again (and the room's TTL is extended),
-//                             unless another round length was asked for
+//                             unless other settings were asked for
 //  - @game while creating  -> waits for the same creation (single-flight)
 //  - TTL expiry            -> back to a fresh main menu, ready for the next @game
 //  - host lost (crash)     -> idle; the next @game builds a new room
@@ -25,8 +14,7 @@ export class RoomManager {
     this.log = log;
     this.state = 'idle';
     this.link = null;
-    this.minutes = null;
-    this.teams = false;
+    this.room = null; // { minutes, teams, arena, weapons } of the live room
     this.createdAt = 0;
     this.inflight = null;
     this.inflightKey = null;
@@ -39,27 +27,35 @@ export class RoomManager {
     });
   }
 
-  // `req` = { minutes, teams, explicit } from parseGameArgs.
-  async getLink(req = { minutes: this.cfg.game.timer.defaultMinutes, teams: false, explicit: false }) {
-    const key = `${req.minutes}/${req.teams}`;
+  // `req` = { minutes, teams, arena, weapons, explicit } from parseGameArgs;
+  // left-out settings take the defaults.
+  async getLink(req = {}) {
+    const g = this.cfg.game;
+    const want = {
+      minutes: req.minutes ?? g.timer.defaultMinutes,
+      teams: req.teams ?? false,
+      arena: req.arena ?? g.defaults.arena,
+      weapons: req.weapons ?? g.defaults.weapons,
+    };
+    const key = roomKey(want);
     while (this.inflight) {
       if (!req.explicit || this.inflightKey === key) return this.inflight;
       await this.inflight.catch(() => {});
     }
     if (this.state === 'live' && this.host.isAlive()) {
-      if (!req.explicit || (this.minutes === req.minutes && this.teams === req.teams)) {
+      if (!req.explicit || roomKey(this.room) === key) {
         this.#armTtl();
-        this.log.event('room_reused', { link: this.link, minutes: this.minutes, teams: this.teams });
-        return { link: this.link, minutes: this.minutes, teams: this.teams, reused: true };
+        this.log.event('room_reused', { link: this.link, ...this.room });
+        return { link: this.link, ...this.room, reused: true };
       }
-      await this.close(`replaced by a ${req.minutes} min${req.teams ? ' team' : ''} room`);
+      await this.close(`replaced by a room with ${key}`);
     }
     this.inflightKey = key;
-    this.inflight = this.#create(req.minutes, req.teams).finally(() => { this.inflight = null; });
+    this.inflight = this.#create(want).finally(() => { this.inflight = null; });
     return this.inflight;
   }
 
-  async #create(minutes, teams) {
+  async #create(room) {
     this.state = 'creating';
     try {
       const rec = await loadRecording(this.cfg.game.recordingFile);
@@ -68,15 +64,14 @@ export class RoomManager {
       for (let attempt = 1; attempt <= attempts; attempt++) {
         const t0 = Date.now();
         try {
-          const link = await this.host.createRoom(rec, { minutes, teams });
+          const link = await this.host.createRoom(rec, room);
           this.state = 'live';
           this.link = link;
-          this.minutes = minutes;
-          this.teams = teams;
+          this.room = room;
           this.createdAt = Date.now();
           this.#armTtl();
-          this.log.event('room_created', { link, minutes, teams, ms: Date.now() - t0, attempt });
-          return { link, minutes, teams, reused: false };
+          this.log.event('room_created', { link, ...room, ms: Date.now() - t0, attempt });
+          return { link, ...room, reused: false };
         } catch (err) {
           lastErr = err;
           const shot = await this.host.screenshot(`fail-${Date.now()}-attempt${attempt}`);
@@ -101,7 +96,7 @@ export class RoomManager {
     clearTimeout(this.ttlTimer);
     this.state = 'idle';
     this.link = null;
-    this.minutes = null;
+    this.room = null;
   }
 
   // The bot was dropped from its room (e.g. kicked): forget the dead link.
