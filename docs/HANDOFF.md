@@ -48,9 +48,13 @@ branches and reaches `main` through pull requests, which CI tests
   limits 2 CPU / 2.5 GiB (software WebGL), to fit the `application-pool`'s
   e2-medium nodes. Those nodes are Spot: a preemption restarts the bot (the
   login is in Redis; a live room is lost).
-- WhatsApp login: `src/authStore.js` keeps it in Redis when `REDIS_URL` is set
-  (`connections: REDIS_URL: redis/smashbot`). The container disk is lost on
-  every restart. Tested against a real Redis.
+- WhatsApp login: `src/authStore.js` keeps it in Redis when `REDIS_URL` is set.
+  The container disk is lost on every restart. Tested against a real Redis.
+  By the owner's choice it shares the existing Redis
+  (`connections: REDIS_URL: redis/inframan-hosting-central-1`) under keys
+  prefixed `smashbot:wa:`; logging out deletes only those. That Redis has no
+  persistence, so if it restarts the bot logs a new pairing code.
+- The pairing number is a plain `env` in `inframan.yaml` (owner's choice).
 - Region: a fresh browser profile may not be on India. Before each room the
   bot reads the region badge and switches to India if needed. Verified on the
   real game that the badge reads IN at 1.000; the actual switch has not been
@@ -66,12 +70,12 @@ branches and reaches `main` through pull requests, which CI tests
    playbook.
 2. Make sure an infrastructure exists. Prefer region `asia-south1` (Mumbai);
    the friends are in India.
-3. Install the **Redis** add-on named `smashbot` **with persistence on**.
-4. The secret `wa-pairing-number` = `917905878588` must be set by the owner
-   (setting secret values is a person-only step).
+3. The bot uses the existing Redis `inframan-hosting-central-1`; nothing to
+   install. The pairing number is in `inframan.yaml`; no secret to set.
+4. A pipeline releasing on pushes to `main` only, linked to the application.
 5. Create the application from `github.com/HarshilShukla05/-game`, branch
-   `main` (it has `inframan.yaml` and the `Dockerfile`). Check the node pool
-   can fit 2 CPU / 4 Gi.
+   `main` (it has `inframan.yaml` and the `Dockerfile`). The GitHub App that
+   reaches it is `inframan-git` (platform id 2).
 6. Before the first start: the **old bot must not be running**. Ask the owner;
    it may still run in the previous sandbox session until it hits its 2-hour
    limit.

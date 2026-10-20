@@ -21,7 +21,10 @@ services:
       memory_request: 1536Mi
       cpu_limit: "2"
       memory_limit: 2560Mi
-    secrets:
-      WA_PAIRING_NUMBER: wa-pairing-number
+    env:
+      # The bot phone's number: links WhatsApp by a code in the logs.
+      WA_PAIRING_NUMBER: "917905878588"
     connections:
-      REDIS_URL: redis/smashbot
+      # The WhatsApp login, under keys prefixed smashbot:wa:. This Redis has
+      # no persistence: if it restarts, the bot logs a new pairing code.
+      REDIS_URL: redis/inframan-hosting-central-1
