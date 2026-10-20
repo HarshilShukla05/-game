@@ -32,20 +32,23 @@ wa.on('command', async ({ name, jid, msg, sender, args }) => {
   }
   const ask = parseGameArgs(args, { timer: cfg.game.timer, defaults: cfg.game.defaults, ...catalog });
   if (ask.help || ask.error) {
-    const text = ask.help ? helpText({ ...catalog, defaults: cfg.game.defaults, timer: cfg.game.timer, trigger })
+    const text = ask.help ? helpText({ ...catalog, defaults: cfg.game.defaults, timer: cfg.game.timer, trigger, startTrigger: cfg.whatsapp.startTrigger })
       : `⚠️ ${ask.error} Send "${trigger} help" for the options. Example: ${trigger} 20 team tunnels`;
     await wa.reply(jid, text, msg).catch((err) => log.error('Reply failed:', err.message));
     return;
   }
   await wa.react(jid, msg.key, '⏳');
   try {
-    const { link, minutes, teams, arena, weapons } = await rooms.getLink(ask);
-    const text = cfg.whatsapp.replyTemplate
+    const { link, minutes, teams, arena, weapons, roundRunning } = await rooms.getLink(ask);
+    const room = cfg.whatsapp.replyTemplate
       .replace('{link}', link)
       .replace('{minutes}', minutes)
       .replace('{format}', teams ? 'Team Battle' : 'Free For All')
       .replace('{arena}', arenaText(arena))
       .replace('{weapons}', weaponsText(weapons, catalog.weapons));
+    const text = roundRunning
+      ? `⏳ A round is running, so the room stays as it is. Ask again when it ends, or send "${trigger} new …" to replace it now.\n${room}`
+      : room;
     await wa.reply(jid, text, msg);
     await wa.react(jid, msg.key, '✅');
   } catch (err) {

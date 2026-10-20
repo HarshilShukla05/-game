@@ -12,12 +12,15 @@ services:
     rollout:
       strategy: recreate
     termination_grace_seconds: 30
-    # Chromium renders the game's WebGL in software (no GPU).
+    node_pool: application-pool
+    # Chromium renders the game's WebGL in software (no GPU). The pool's
+    # e2-medium nodes have about 0.94 allocatable vCPU and 2.8 GiB; the bot
+    # bursts to both cores while it builds a room.
     resources:
-      cpu_request: "1"
-      memory_request: 2Gi
+      cpu_request: 700m
+      memory_request: 1536Mi
       cpu_limit: "2"
-      memory_limit: 4Gi
+      memory_limit: 2560Mi
     secrets:
       WA_PAIRING_NUMBER: wa-pairing-number
     connections:

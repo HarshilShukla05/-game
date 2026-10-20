@@ -9,11 +9,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-# Optional build secret "ca": an extra CA for builds behind a TLS-inspecting
-# proxy. Absent on normal builders; never stored in the image.
-RUN --mount=type=secret,id=ca,required=false \
-    if [ -f /run/secrets/ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca; fi; \
-    npm ci --omit=dev
+RUN npm ci --omit=dev
 COPY config.json ./
 COPY src ./src
 COPY recordings ./recordings

@@ -3,7 +3,9 @@ import { roomKey } from './options.js';
 
 // One room at a time. States: idle -> creating -> live -> idle.
 //  - @game while live      -> same link again (and the room's TTL is extended),
-//                             unless other settings were asked for
+//                             unless other settings were asked for; those
+//                             wait while a round runs (friends are playing),
+//                             unless the ask says "new" (fresh)
 //  - @game while creating  -> waits for the same creation (single-flight)
 //  - TTL expiry            -> back to a fresh main menu, ready for the next @game
 //  - host lost (crash)     -> idle; the next @game builds a new room
@@ -16,6 +18,7 @@ export class RoomManager {
     this.link = null;
     this.room = null; // { minutes, teams, arena, weapons } of the live room
     this.createdAt = 0;
+    this.roundEndsAt = 0;
     this.inflight = null;
     this.inflightKey = null;
     this.ttlTimer = null;
@@ -32,8 +35,10 @@ export class RoomManager {
     });
   }
 
-  // `req` = { minutes, teams, arena, weapons, explicit } from parseGameArgs;
-  // left-out settings take the defaults.
+  // `req` = { minutes, teams, arena, weapons, explicit, fresh } from
+  // parseGameArgs; left-out settings take the defaults. Returns the room
+  // with `reused`, and `roundRunning` when other settings were refused
+  // because a round is on.
   async getLink(req = {}) {
     const g = this.cfg.game;
     const want = {
@@ -48,10 +53,14 @@ export class RoomManager {
       await this.inflight.catch(() => {});
     }
     if (this.state === 'live' && this.host.isAlive()) {
-      if (!req.explicit || roomKey(this.room) === key) {
+      if (!req.fresh && (!req.explicit || roomKey(this.room) === key)) {
         this.#armTtl();
         this.log.event('room_reused', { link: this.link, ...this.room });
         return { link: this.link, ...this.room, reused: true };
+      }
+      if (!req.fresh && this.roundRunning()) {
+        this.log.event('room_kept', { link: this.link, asked: key, reason: 'round running' });
+        return { link: this.link, ...this.room, reused: true, roundRunning: true };
       }
       await this.close(`replaced by a room with ${key}`);
     }
@@ -102,6 +111,7 @@ export class RoomManager {
     this.state = 'idle';
     this.link = null;
     this.room = null;
+    this.roundEndsAt = 0;
   }
 
   // The bot was dropped from its room (e.g. kicked): forget the dead link.
@@ -111,10 +121,17 @@ export class RoomManager {
     this.#toIdle();
   }
 
+  // A round started by @start is taken to run its full length (plus a
+  // minute for the scoreboard); the next one needs @start again.
+  roundRunning() {
+    return this.state === 'live' && Date.now() < this.roundEndsAt;
+  }
+
   // Returns 'started' or 'already running'.
   async startRound() {
     if (this.state !== 'live') throw new Error('No room is live');
     const result = await this.host.startRound(await loadRecording(this.cfg.game.recordingFile));
+    if (result === 'started' || !this.roundRunning()) this.roundEndsAt = Date.now() + (this.room.minutes + 1) * 60_000;
     this.#armTtl();
     this.log.event('round_started', { link: this.link, result });
     return result;

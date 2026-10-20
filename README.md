@@ -1,9 +1,9 @@
 # Smash Karts WhatsApp bot
 
-Someone types `@game` in the friends' WhatsApp group. The bot hosts a Smash Karts
-private room (by default Nukes only, Smash Island, region India) in a real
-browser and replies with the invite link. On a phone, the link opens the Smash
-Karts app.
+Anyone in the friends' WhatsApp group types `@game`. The bot hosts a Smash
+Karts private room (by default Nukes only, Smash Island, region India) in a
+real browser and replies with the invite link. On a phone, the link opens the
+Smash Karts app. Only the groups in `whatsapp.groupIds` can use it.
 
 | Command | What happens |
 |---|---|
@@ -12,8 +12,9 @@ Karts app.
 | `@game team` | Team Battle. |
 | `@game tunnels` | Any of the 30 arenas, or `random`. Full names or a part only one arena has: `sky arena tunnels`, `tunnels`, `island`, `old graveyard`. |
 | `@game nuke mines` / `@game all` | One or more of the 12 weapons, or all of them. Plurals and short names work: `nukes`, `gun`, `spikes`. |
-| `@game 20 team tunnels nuke mines` | Everything together, in any order. A live room with other settings is replaced. |
-| `@game help` | Lists the arenas and weapons. |
+| `@game 20 team tunnels nuke mines` | Everything together, in any order. A live room with other settings is replaced, except while a round is running: then the bot keeps the room and says so. |
+| `@game new …` | A fresh room even if the live one matches or a round is running. |
+| `@game help` | Lists the arenas, weapons and commands. |
 | `@start` | Starts the round. The host must start each round, and the bot is the host. |
 
 Verified on the real game (smashkarts.io 2.16.007): rooms made on the first
@@ -110,8 +111,9 @@ npm run start:xvfb   # no monitor / lid closed: virtual display
 1. Scan the QR code with the **bot's phone**: WhatsApp → Linked devices → Link a device.
    No second screen? Start with `WA_PAIRING_NUMBER=<bot number with country code>`
    and enter the printed 8-character code under "Link with phone number instead".
-2. Type `@game` in the group. The bot logs the group ID.
-3. Put the ID in `config.json` → `whatsapp.groupIds` to lock the bot to that group.
+2. `whatsapp.groupIds` holds the friends' group. For another group, empty it
+   (setup mode: any group works and the bot logs each group's ID), type
+   `@game` there, and put the logged ID in the list.
 
 ### Keep it running
 
@@ -130,7 +132,7 @@ in `/etc/systemd/logind.conf`, then run `sudo systemctl restart systemd-logind`.
 
 | Key | Meaning |
 |---|---|
-| `whatsapp.groupIds` | Allowed groups. Empty = setup mode (any group, IDs are logged). |
+| `whatsapp.groupIds` | Allowed groups; everyone in them can use the bot (or env `WA_GROUP_IDS`, comma-separated). Empty = setup mode (any group, IDs are logged). |
 | `whatsapp.pairingNumber` | Bot number for code-based linking (or env `WA_PAIRING_NUMBER`). |
 | `whatsapp.trigger` / `startTrigger` | Command texts, default `@game` and `@start`. |
 | `whatsapp.replyTemplate` | Reply text with `{link}`, `{weapons}`, `{arena}`, `{format}`, `{minutes}`. |
@@ -138,7 +140,7 @@ in `/etc/systemd/logind.conf`, then run `sudo systemctl restart systemd-logind`.
 | `browser.channel` / `executablePath` | Use installed Chrome (`"chrome"`) or a specific binary (or env `CHROMIUM_PATH`). |
 | `game.menuTimeoutMs` | How long to wait for the game to load and connect (default 3 min). |
 | `game.createAttempts` | Full attempts per `@game`, each from a fresh reload. |
-| `game.captureDir` | Saves every room's network frames here, one file per room (empty: off). See `docs/NETWORK.md`. |
+| `game.captureDir` | Saves every room's network frames here, one file per room (or env `SK_CAPTURE_DIR`; empty: off). Training data, see `docs/NETWORK.md`. |
 | `game.defaults` | Arena and weapons when `@game` names none (names as in the recording's tiles). |
 | `game.timer` | Round lengths the game cycles through, the default, and the ▶ arrow position. |
 | `game.photonPort443` | Moves Photon WebSockets to port 443 (env `SK_PHOTON_PORT_443=1`). Only for networks that block port 19093, e.g. the cloud sandbox. |
@@ -154,7 +156,11 @@ in `/etc/systemd/logind.conf`, then run `sudo systemctl restart systemd-logind`.
 ```bash
 npm test                                   # unit tests
 xvfb-run -a npm test                       # plus end-to-end tests against test/fixtures/fake-game.html
+REDIS_TEST_URL=redis://localhost:6379 xvfb-run -a npm test   # plus the Redis login store
 ```
+
+GitHub Actions runs all of them on every pull request and on `main`
+(`.github/workflows/test.yml`). `main` is what gets deployed.
 
 The fake game copies the real game's JS surface (`window.copyText`,
 `onLoadingToMainMenuComplete`, which fires before the canvas finishes loading).

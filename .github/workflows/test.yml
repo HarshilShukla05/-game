@@ -1,0 +1,44 @@
+name: test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels the older run. Runs on main are never
+# cancelled: each push there deploys, so each needs its own result.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4.1
+        ports: ["6379:6379"]
+        # Steps wait until Redis answers, so the auth store test never races it.
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Matches the pinned playwright package. --with-deps adds the system
+      # libraries and xvfb; the integration test skips without a display.
+      - run: npx playwright install --with-deps chromium
+      - run: xvfb-run -a npm test
+        env:
+          REDIS_TEST_URL: redis://localhost:6379
