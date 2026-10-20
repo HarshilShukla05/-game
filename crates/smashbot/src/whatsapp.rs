@@ -285,30 +285,26 @@ impl Runtime for OneThread {
     }
 }
 
-/// Runs the bot until `shutdown` resolves (or WhatsApp logs it out), then
-/// leaves any room still waiting for a player.
-pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(), String> {
+/// A WhatsApp client for the session in the store.
+async fn connect(config: &Config, inbox: Arc<Inbox>) -> Result<Bot, String> {
     let store = SqliteStore::new(&config.store)
         .await
         .map_err(|e| format!("session store {}: {e}", config.store))?;
-    let (jobs_tx, jobs) = mpsc::channel(QUEUE);
-    let inbox = Arc::new(Inbox {
-        config: config.clone(),
-        jobs: jobs_tx,
-        seen: Mutex::default(),
-        reported: Mutex::default(),
-    });
+    let pairing = config.pairing_number.is_some();
     let mut builder = Bot::builder()
         .with_backend(store)
         .with_transport_factory(Socket)
         .with_http_client(http_client())
         .with_runtime(OneThread)
         .skip_history_sync()
-        .on_qr_code(|code, timeout| async move {
-            log::info!(
-                "link the bot phone: WhatsApp → Linked devices → Link a device, scan this QR (valid {} s), or set WA_PAIRING_NUMBER to link by code:\n{code}",
-                timeout.as_secs()
-            );
+        .on_qr_code(move |code, timeout| async move {
+            // With a pairing number the code is the way in; QRs are noise.
+            if !pairing {
+                log::info!(
+                    "link the bot phone: WhatsApp → Linked devices → Link a device, scan this QR (valid {} s), or set WA_PAIRING_NUMBER to link by code:\n{code}",
+                    timeout.as_secs()
+                );
+            }
         })
         .on_pair_code(|code, timeout| async move {
             log::info!(
@@ -318,7 +314,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         })
         .on_connected(|_| async { log::info!("WhatsApp connected") })
         .on_logged_out(|_| async {
-            log::error!("WhatsApp logged this device out; delete the session store and link again");
+            log::error!("WhatsApp logged this device out; linking again");
         })
         .on_message(move |ctx| {
             inbox.on_message(ctx);
@@ -330,24 +326,63 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
             ..Default::default()
         });
     }
-    let bot = builder
-        .build()
-        .await
-        .map_err(|e| format!("WhatsApp: {e}"))?;
-    let mut handle = bot.spawn();
+    builder.build().await.map_err(|e| format!("WhatsApp: {e}"))
+}
+
+/// Runs the bot until `shutdown` resolves, then leaves any room still
+/// waiting for a player. When the client stops (linking not completed in
+/// time, logged out), it starts again, backing off up to a minute.
+pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(), String> {
+    const FIRST_RETRY: Duration = Duration::from_secs(2);
+    const MAX_RETRY: Duration = Duration::from_secs(60);
+    /// A client that ran this long was healthy: retry quickly again.
+    const HEALTHY: Duration = Duration::from_secs(300);
+
+    let (jobs_tx, jobs) = mpsc::channel(QUEUE);
+    let inbox = Arc::new(Inbox {
+        config: config.clone(),
+        jobs: jobs_tx,
+        seen: Mutex::default(),
+        reported: Mutex::default(),
+    });
     let (stop, stop_rx) = oneshot::channel();
     let worker = tokio::spawn(work(jobs, config.trigger.clone(), stop_rx));
+    tokio::pin!(shutdown);
 
-    tokio::select! {
-        _ = &mut handle => log::warn!("WhatsApp client stopped"),
-        () = shutdown => log::info!("shutting down"),
-    }
+    let mut retry = FIRST_RETRY;
+    let result = loop {
+        let started = tokio::time::Instant::now();
+        match connect(&config, inbox.clone()).await {
+            Ok(bot) => {
+                let mut handle = bot.spawn();
+                tokio::select! {
+                    _ = &mut handle => log::warn!("WhatsApp client stopped"),
+                    () = &mut shutdown => {
+                        log::info!("shutting down");
+                        handle.shutdown().await;
+                        break Ok(());
+                    }
+                }
+            }
+            // A store that cannot open will not open on a retry either.
+            Err(e) if e.starts_with("session store") => break Err(e),
+            Err(e) => log::error!("{e}"),
+        }
+        if started.elapsed() > HEALTHY {
+            retry = FIRST_RETRY;
+        }
+        log::info!("starting WhatsApp again in {} s", retry.as_secs());
+        tokio::select! {
+            () = tokio::time::sleep(retry) => {}
+            () = &mut shutdown => break Ok(()),
+        }
+        retry = (retry * 2).min(MAX_RETRY);
+    };
     let _ = stop.send(());
     if let Ok(mut rooms) = worker.await {
         rooms.close().await;
     }
-    handle.shutdown().await;
-    Ok(())
+    result
 }
 
 #[cfg(test)]
