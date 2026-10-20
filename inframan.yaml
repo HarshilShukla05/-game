@@ -28,11 +28,15 @@ services:
     # Chromium renders the game's WebGL in software (no GPU). The pool's
     # e2-medium nodes have about 0.94 allocatable vCPU and 2.8 GiB; the bot
     # bursts to both cores while it builds a room.
+    # Memory: the browser measured 1.3 GiB at peak (1.1 GiB in a round), so the
+    # limit sits just above that. The request is kept small on the shared
+    # nodes (owner's choice): under memory pressure this pod is evicted first,
+    # which spares the other services and only restarts the bot.
     resources:
       cpu_request: 700m
-      memory_request: 1536Mi
+      memory_request: 100Mi
       cpu_limit: "2"
-      memory_limit: 2560Mi
+      memory_limit: 1536Mi
     env:
       # The bot phone's number: links WhatsApp by a code in the logs.
       WA_PAIRING_NUMBER: "917905878588"
