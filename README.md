@@ -138,6 +138,7 @@ in `/etc/systemd/logind.conf`, then run `sudo systemctl restart systemd-logind`.
 | `browser.channel` / `executablePath` | Use installed Chrome (`"chrome"`) or a specific binary (or env `CHROMIUM_PATH`). |
 | `game.menuTimeoutMs` | How long to wait for the game to load and connect (default 3 min). |
 | `game.createAttempts` | Full attempts per `@game`, each from a fresh reload. |
+| `game.captureDir` | Saves every room's network frames here, one file per room (empty: off). See `docs/NETWORK.md`. |
 | `game.defaults` | Arena and weapons when `@game` names none (names as in the recording's tiles). |
 | `game.timer` | Round lengths the game cycles through, the default, and the ▶ arrow position. |
 | `game.photonPort443` | Moves Photon WebSockets to port 443 (env `SK_PHOTON_PORT_443=1`). Only for networks that block port 19093, e.g. the cloud sandbox. |

@@ -2,6 +2,7 @@ import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { Host } from './host.js';
 import { RoomManager } from './roomManager.js';
+import { recordFrames } from './capture.js';
 import { arenaText, helpText, parseGameArgs, weaponsText } from './options.js';
 import { loadRecording } from './replay.js';
 import { WhatsApp } from './whatsapp.js';
@@ -10,7 +11,8 @@ const WATCHDOG_MS = 60_000;
 
 const cfg = loadConfig();
 const log = createLogger(cfg.dataDir);
-const host = new Host(cfg, log);
+const host = new Host(cfg, log, { capture: Boolean(cfg.game.captureDir) });
+if (cfg.game.captureDir) recordFrames(host, cfg.game.captureDir, log);
 const rooms = new RoomManager(host, cfg, log);
 const wa = new WhatsApp(cfg, log);
 
