@@ -26,16 +26,18 @@ services:
         - package.json
         - package-lock.json
     # Chromium renders the game's WebGL in software (no GPU). The pool's
-    # e2-medium nodes have about 0.94 allocatable vCPU and 2.8 GiB; the bot
-    # bursts to both cores while it builds a room.
+    # e2-medium nodes have about 0.94 allocatable vCPU and 2.8 GiB, shared
+    # with other services, so the bot reserves little and is capped at one
+    # core: building a room can not starve its neighbours, it just takes
+    # longer. (700m did not fit beside them, and no node was added.)
     # Memory: the browser measured 1.3 GiB at peak (1.1 GiB in a round), so the
     # limit sits just above that. The request is kept small on the shared
     # nodes (owner's choice): under memory pressure this pod is evicted first,
     # which spares the other services and only restarts the bot.
     resources:
-      cpu_request: 700m
+      cpu_request: 250m
       memory_request: 100Mi
-      cpu_limit: "2"
+      cpu_limit: "1"
       memory_limit: 1536Mi
     env:
       # The bot phone's number: links WhatsApp by a code in the logs.
