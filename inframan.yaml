@@ -13,6 +13,18 @@ services:
       strategy: recreate
     termination_grace_seconds: 30
     node_pool: application-pool
+    # Only what the image copies (see Dockerfile; it is always watched).
+    # A push touching only docs, tests or tools does not restart the bot,
+    # which would end a live room.
+    build:
+      method: docker
+      dockerfile: ./Dockerfile
+      watch_paths:
+        - src
+        - recordings
+        - config.json
+        - package.json
+        - package-lock.json
     # Chromium renders the game's WebGL in software (no GPU). The pool's
     # e2-medium nodes have about 0.94 allocatable vCPU and 2.8 GiB; the bot
     # bursts to both cores while it builds a room.
