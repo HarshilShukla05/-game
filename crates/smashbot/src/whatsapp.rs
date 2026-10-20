@@ -88,9 +88,6 @@ struct Inbox {
 impl Inbox {
     fn on_message(&self, ctx: MessageContext) {
         let source = &ctx.info.source;
-        if !source.is_group {
-            return;
-        }
         let Some(args) = ctx
             .message
             .text_content()
@@ -112,6 +109,12 @@ impl Inbox {
             return;
         }
         let chat = source.chat.to_string();
+        let listed = self.config.group_ids.contains(&chat);
+        // Direct chats only when listed: setup mode is for finding groups.
+        if !source.is_group && !listed {
+            log::info!("ignoring a command from unlisted chat {chat}");
+            return;
+        }
         if self.config.group_ids.is_empty() {
             if self
                 .reported
@@ -123,7 +126,8 @@ impl Inbox {
                     "setup mode: command from group {chat}; set WA_GROUP_IDS={chat} to answer only there"
                 );
             }
-        } else if !self.config.group_ids.contains(&chat) {
+        } else if !listed {
+            log::info!("ignoring a command from unlisted chat {chat}");
             return;
         }
         log::info!("command from {} in {chat}: {args:?}", source.sender);

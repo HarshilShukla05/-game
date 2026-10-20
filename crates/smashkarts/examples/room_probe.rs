@@ -15,12 +15,21 @@ async fn main() {
     if let Ok(v) = std::env::var("APP_VERSION") {
         app.app_version = v;
     }
-    let (conn, _) = master(&app, &smashkarts::new_user_id()).await.expect("master");
+    let (conn, _) = master(&app, &smashkarts::new_user_id())
+        .await
+        .expect("master");
     let reply = conn
-        .request(OP_JOIN_GAME, Params::new().with(P_ROOM_NAME, name.as_str()), Duration::from_secs(10))
+        .request(
+            OP_JOIN_GAME,
+            Params::new().with(P_ROOM_NAME, name.as_str()),
+            Duration::from_secs(10),
+        )
         .await
         .expect("join");
-    println!("app {} rc {} {:?}", app.app_version, reply.return_code, reply.debug_message);
+    println!(
+        "app {} rc {} {:?}",
+        app.app_version, reply.return_code, reply.debug_message
+    );
     for (k, v) in &reply.params.0 {
         if *k != 221 {
             println!("  {k}: {v:?}");

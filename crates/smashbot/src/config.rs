@@ -6,8 +6,9 @@ use std::env;
 pub struct Config {
     /// The bot phone's number (digits only), to link by a code instead of a QR.
     pub pairing_number: Option<String>,
-    /// Groups the bot answers in. Empty: any group, logging each one's id so
-    /// it can be put here ("setup mode").
+    /// Chats the bot answers in: group ids, and direct chats for testing.
+    /// Empty: any group, logging each one's id so it can be put here
+    /// ("setup mode").
     pub group_ids: Vec<String>,
     /// The command word, e.g. "@game".
     pub trigger: String,
