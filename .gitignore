@@ -2,3 +2,4 @@ node_modules/
 auth/
 profile/
 data/
+target/

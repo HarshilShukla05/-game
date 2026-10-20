@@ -1,0 +1,17 @@
+[package]
+name = "smashkarts"
+version = "0.1.0"
+description = "Smash Karts on Photon: private rooms without the game client, invite links, settings"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photon = { path = "../photon", features = ["client"] }
+
+[dev-dependencies]
+log = { version = "0.4", features = ["std"] }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time"] }

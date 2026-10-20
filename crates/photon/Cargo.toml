@@ -1,0 +1,23 @@
+[package]
+name = "photon"
+version = "0.1.0"
+description = "Photon (Exit Games) binary protocol 1.8 codec and WebSocket client, game-agnostic"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Async WebSocket client (tokio, rustls). The codec alone needs no dependencies.
+client = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:log", "dep:rustls"]
+
+[dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros", "io-util"], optional = true }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
+log = { version = "0.4", optional = true }
+# One TLS crypto backend, chosen explicitly: ring (small, no C toolchain).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
