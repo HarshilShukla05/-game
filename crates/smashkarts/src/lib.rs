@@ -35,11 +35,13 @@ pub struct Settings {
 
 /// Room mode bits (`gm`): round minutes in bits 8-15, Team Battle bit 1, and
 /// constant flags seen on every room the game made. CTF arenas take the same
-/// bits: the game makes them as plain rooms on that arena.
+/// bits: the game makes them as plain rooms on that arena. The web game sets
+/// bit 28 when its host plays rather than spectates; the phone app (4.1.0)
+/// does not, and refuses rooms that carry it, so it is left out. The bot
+/// leaves its rooms anyway.
 pub fn mode(s: &Settings) -> i32 {
     const BASE: i32 = 0x0400_0008;
-    const HOST_PLAYS: i32 = 0x1000_0000;
-    BASE | HOST_PLAYS | (i32::from(s.minutes) << 8) | if s.teams { 2 } else { 0 }
+    BASE | (i32::from(s.minutes) << 8) | if s.teams { 2 } else { 0 }
 }
 
 /// The invite link the game itself builds (it opens the app on phones).
@@ -174,11 +176,11 @@ mod tests {
 
     #[test]
     fn mode_bits_match_the_game() {
-        // Captured: a 3 min Free For All room with the host playing.
-        assert_eq!(mode(&island(3, false)), 335_545_096);
-        // The game's own 6 min Team Battle room (host spectating, so
-        // without that bit): minutes in bits 8-15, Team Battle in bit 1.
-        assert_eq!(mode(&island(6, true)) & !0x1000_0000, 67_110_410);
+        // Rooms the game made: 3 min Free For All (web), 10 min Free For
+        // All (phone app 4.1.0), 6 min Team Battle (web).
+        assert_eq!(mode(&island(3, false)), 67_109_640);
+        assert_eq!(mode(&island(10, false)), 67_111_432);
+        assert_eq!(mode(&island(6, true)), 67_110_410);
         assert_eq!((mode(&island(20, true)) >> 8) & 0xFF, 20);
     }
 
@@ -186,7 +188,7 @@ mod tests {
     fn link_matches_the_game() {
         assert_eq!(
             invite_link("in324492", &island(3, false)),
-            "https://smashkarts.io/link/?mode=335545096&wpns=256&room=in324492&arena=smashisland&mdfrs=0"
+            "https://smashkarts.io/link/?mode=67109640&wpns=256&room=in324492&arena=smashisland&mdfrs=0"
         );
     }
 
