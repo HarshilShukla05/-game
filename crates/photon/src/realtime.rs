@@ -9,13 +9,17 @@ use std::time::Duration;
 // Operation codes.
 pub const OP_AUTHENTICATE: u8 = 230;
 pub const OP_JOIN_GAME: u8 = 226;
+pub const OP_JOIN_LOBBY: u8 = 229;
 pub const OP_CREATE_GAME: u8 = 227;
 pub const OP_LEAVE: u8 = 254;
 
 // Parameter codes.
+pub const P_LOBBY_TYPE: u8 = 212;
+pub const P_LOBBY_NAME: u8 = 213;
 pub const P_REGION: u8 = 210;
 pub const P_APP_VERSION: u8 = 220;
 pub const P_TOKEN: u8 = 221;
+pub const P_GAME_LIST: u8 = 222;
 pub const P_APP_ID: u8 = 224;
 pub const P_USER_ID: u8 = 225;
 pub const P_ADDRESS: u8 = 230;
@@ -29,6 +33,9 @@ pub const P_MASTER_CLIENT_ID: u8 = 203;
 // Event codes.
 pub const EV_JOIN: u8 = 255;
 pub const EV_LEAVE: u8 = 254;
+/// A lobby's room list (param 222: room name → lobby-visible properties).
+pub const EV_GAME_LIST: u8 = 230;
+pub const EV_GAME_LIST_UPDATE: u8 = 229;
 
 /// Return code when a room name is already taken.
 pub const GAME_ID_ALREADY_EXISTS: i16 = 32766;
@@ -141,12 +148,19 @@ async fn with_token(app: &AppSettings, address: &str, token: Value) -> Result<(C
     Ok((conn, token))
 }
 
+/// Connects and authenticates to the region's master server, where rooms
+/// are created, joined and listed (lobbies). Returns the connection and the
+/// token the game servers accept.
+pub async fn master(app: &AppSettings, user_id: &str) -> Result<(Connection, Value)> {
+    let (address, token) = name_server(app, user_id).await?;
+    with_token(app, &address, token).await
+}
+
 /// Creates the room and enters it. Fails with `Refused { return_code:
 /// GAME_ID_ALREADY_EXISTS, .. }` when the name is taken, never joining
 /// someone else's room.
 pub async fn create_room(app: &AppSettings, user_id: &str, spec: &RoomSpec) -> Result<Room> {
-    let (master_address, token) = name_server(app, user_id).await?;
-    let (master, token) = with_token(app, &master_address, token).await?;
+    let (master, token) = master(app, user_id).await?;
     let mut create = Params::new().with(P_ROOM_NAME, spec.name.as_str());
     create.0.extend(spec.create_params.0.iter().cloned());
     log::debug!("photon: creating room {} on the master", spec.name);

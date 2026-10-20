@@ -8,16 +8,12 @@
 
 use crate::{Message, Params, Value, decode, encode_into};
 use futures_util::{SinkExt, StreamExt};
+use net::Message as WsMessage;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
 
 /// The WebSocket subprotocol for Photon's binary protocol 1.8.
 pub const SUBPROTOCOL: &str = "GpBinaryV18";
@@ -144,30 +140,16 @@ impl Connection {
     }
 
     async fn open(url: &str) -> Result<Connection> {
-        let mut request = url
-            .into_client_request()
-            .map_err(|e| ClientError::Connect(e.to_string()))?;
-        request.headers_mut().insert(
-            "Sec-WebSocket-Protocol",
-            HeaderValue::from_static(SUBPROTOCOL),
+        let protocol = (
+            net::header::SEC_WEBSOCKET_PROTOCOL,
+            net::HeaderValue::from_static(SUBPROTOCOL),
         );
-        let host = request
-            .uri()
-            .host()
-            .ok_or_else(|| ClientError::Connect("no host in URL".into()))?
-            .to_owned();
-        let port = request.uri().port_u16().unwrap_or(443);
-
-        let tcp = match proxy() {
-            Some(proxy) => connect_via_proxy(&proxy, &host, port).await?,
-            None => TcpStream::connect((host.as_str(), port))
-                .await
-                .map_err(|e| ClientError::Connect(e.to_string()))?,
-        };
-        let _ = tcp.set_nodelay(true);
-        let (ws, _) = tokio_tungstenite::client_async_tls_with_config(request, tcp, None, None)
+        let ws = net::websocket(url, &[protocol])
             .await
-            .map_err(|e| ClientError::WebSocket(e.to_string()))?;
+            .map_err(|e| match e {
+                net::Error::WebSocket(e) => ClientError::WebSocket(e.to_string()),
+                e => ClientError::Connect(e.to_string()),
+            })?;
 
         let (commands, commands_rx) = mpsc::channel(32);
         let (events_tx, events) = mpsc::channel(EVENT_BACKLOG);
@@ -223,15 +205,13 @@ impl Connection {
     }
 }
 
-async fn run<S>(
-    ws: tokio_tungstenite::WebSocketStream<S>,
+async fn run(
+    ws: net::WebSocket,
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
     ready: oneshot::Sender<()>,
     clock: Arc<ServerClock>,
-) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
+) {
     let (mut sink, mut stream) = ws.split();
     let mut ready = Some(ready);
     let mut pending: Vec<(u8, oneshot::Sender<Result<Response>>)> = Vec::new();
@@ -240,12 +220,13 @@ async fn run<S>(
     loop {
         tokio::select! {
             frame = stream.next() => {
-                let bytes = match frame {
-                    Some(Ok(WsMessage::Binary(b))) => b,
-                    Some(Ok(WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Text(_) | WsMessage::Frame(_))) => continue,
-                    Some(Ok(WsMessage::Close(_))) | Some(Err(_)) | None => break,
+                // WebSocket pings are answered by the stream itself.
+                let msg = match frame {
+                    Some(Ok(m)) if m.is_binary() => m,
+                    Some(Ok(m)) if !m.is_close() => continue,
+                    _ => break,
                 };
-                match decode(&bytes) {
+                match decode(msg.as_payload()) {
                     Ok(Message::Other { msg_type: MSG_INIT_RESPONSE, .. }) => {
                         if let Some(r) = ready.take() {
                             let _ = r.send(());
@@ -288,7 +269,7 @@ async fn run<S>(
                     }
                 }
                 Some(Command::Close) | None => {
-                    let _ = sink.send(WsMessage::Close(None)).await;
+                    let _ = sink.send(WsMessage::close(None, "")).await;
                     break;
                 }
             },
@@ -311,41 +292,5 @@ where
     S: futures_util::Sink<WsMessage> + Unpin,
 {
     let mut buf = Vec::with_capacity(64);
-    encode_into(msg, &mut buf).is_ok() && sink.send(WsMessage::Binary(buf.into())).await.is_ok()
-}
-
-/// `HTTPS_PROXY` as host:port, when set (only plain `http://` proxies).
-fn proxy() -> Option<String> {
-    let p = std::env::var("HTTPS_PROXY")
-        .or_else(|_| std::env::var("https_proxy"))
-        .ok()?;
-    let rest = p.strip_prefix("http://")?;
-    Some(rest.trim_end_matches('/').to_owned())
-}
-
-async fn connect_via_proxy(proxy: &str, host: &str, port: u16) -> Result<TcpStream> {
-    let err = |e: std::io::Error| ClientError::Connect(format!("proxy {proxy}: {e}"));
-    let mut tcp = TcpStream::connect(proxy).await.map_err(err)?;
-    let hello = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n");
-    tcp.write_all(hello.as_bytes()).await.map_err(err)?;
-    // Read the reply headers byte by byte so no tunnelled bytes are consumed.
-    let mut head = Vec::with_capacity(128);
-    while !head.ends_with(b"\r\n\r\n") {
-        if head.len() > 8192 {
-            return Err(ClientError::Connect("proxy reply too long".into()));
-        }
-        head.push(tcp.read_u8().await.map_err(err)?);
-    }
-    let status = String::from_utf8_lossy(&head);
-    if !status
-        .split_whitespace()
-        .nth(1)
-        .is_some_and(|code| code == "200")
-    {
-        return Err(ClientError::Connect(format!(
-            "proxy refused: {}",
-            status.lines().next().unwrap_or("")
-        )));
-    }
-    Ok(tcp)
+    encode_into(msg, &mut buf).is_ok() && sink.send(WsMessage::binary(buf)).await.is_ok()
 }

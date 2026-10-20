@@ -17,8 +17,7 @@ async fn main() {
     let settings = Settings {
         minutes: 3,
         teams: false,
-        arena: "Smash Island".into(),
-        arena_slug: "smashisland".into(),
+        arena: "Smash Island",
         weapons: 256,
     };
     let t0 = Instant::now();

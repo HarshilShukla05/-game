@@ -1,0 +1,20 @@
+[package]
+name = "smashbot"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WhatsApp bot that makes Smash Karts rooms for a group"
+
+[lints]
+workspace = true
+
+[dependencies]
+smashkarts = { path = "../smashkarts" }
+photon = { path = "../photon", features = ["client"] }
+net = { path = "../net" }
+whatsapp-rust = { version = "0.7", default-features = false, features = ["tokio-runtime", "tokio-transport", "sqlite-storage", "ureq-client"] }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "sync", "signal"] }
+# The same ureq as whatsapp-rust's HTTP client, to give it the shared roots.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+log = { version = "0.4", features = ["std"] }

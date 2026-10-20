@@ -1,6 +1,9 @@
 //! Smash Karts private rooms, created by talking to Photon directly (no game
-//! client, no browser). Everything here was read off the real game's traffic
-//! (smashkarts.io 2.16.008); see docs/NETWORK.md.
+//! client, no browser). Everything here was read off the real game: its
+//! traffic, its build's data and rooms it made; see docs/NETWORK.md.
+
+pub mod catalog;
+pub mod chat;
 
 use photon::client::ClientError;
 use photon::realtime::{self, AppSettings, GAME_ID_ALREADY_EXISTS, Room, RoomSpec};
@@ -19,21 +22,20 @@ pub fn app() -> AppSettings {
 }
 
 /// What a room is set up with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     /// Round length: 3, 6, 10 or 20.
     pub minutes: u8,
     pub teams: bool,
-    /// The game's own arena name, e.g. "Smash Island".
-    pub arena: String,
-    /// The arena's id in invite links, e.g. "smashisland".
-    pub arena_slug: String,
+    /// The game's own arena name, one of [`catalog::ARENAS`].
+    pub arena: &'static str,
     /// Allowed weapons as the `wpns` bitmask (Nuke only: 1 << 8).
     pub weapons: u32,
 }
 
 /// Room mode bits (`gm`): round minutes in bits 8-15, Team Battle bit 1, and
-/// constant flags seen on every room the game made.
+/// constant flags seen on every room the game made. CTF arenas take the same
+/// bits: the game makes them as plain rooms on that arena.
 pub fn mode(s: &Settings) -> i32 {
     const BASE: i32 = 0x0400_0008;
     const HOST_PLAYS: i32 = 0x1000_0000;
@@ -46,7 +48,7 @@ pub fn invite_link(room: &str, s: &Settings) -> String {
         "https://smashkarts.io/link/?mode={}&wpns={}&room={room}&arena={}&mdfrs=0",
         mode(s),
         s.weapons,
-        s.arena_slug
+        catalog::slug(s.arena)
     )
 }
 
@@ -65,7 +67,7 @@ pub fn room_params(s: &Settings, now: i32) -> Params {
         ("wm".into(), Value::Int(s.weapons as i32)),
         ("gv".into(), Value::Int(1)),
         ("mm".into(), Value::Int(0)),
-        ("gl".into(), s.arena.as_str().into()),
+        ("gl".into(), s.arena.into()),
         ("ahts".into(), Value::Int(now)),
     ]);
     Params::new()
@@ -100,9 +102,9 @@ pub async fn create_room(
     let mut last = None;
     for attempt in 0..4u64 {
         let name = room_name(random_u64() ^ attempt);
-        // The game stamps rooms with the server clock; a fresh connection
-        // has not measured it yet, so the stamp is taken from the master's
-        // clock on the next attempt if this one fails.
+        // The game stamps `ahts` with Photon's server clock. Rooms stamped 0
+        // were tested end to end (joined, handed over, a round played), so
+        // creation does not wait to measure the clock.
         let spec = RoomSpec {
             name: name.clone(),
             create_params: room_params(s, 0),
@@ -146,7 +148,7 @@ pub fn new_user_id() -> String {
 }
 
 /// Randomness without a dependency: std's per-process random hash keys.
-fn random_u64() -> u64 {
+pub fn random_u64() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
     h.write_u128(
@@ -165,8 +167,7 @@ mod tests {
         Settings {
             minutes,
             teams,
-            arena: "Smash Island".into(),
-            arena_slug: "smashisland".into(),
+            arena: "Smash Island",
             weapons: 256,
         }
     }
@@ -175,9 +176,10 @@ mod tests {
     fn mode_bits_match_the_game() {
         // Captured: a 3 min Free For All room with the host playing.
         assert_eq!(mode(&island(3, false)), 335_545_096);
-        // Minutes in bits 8-15, Team Battle in bit 1.
+        // The game's own 6 min Team Battle room (host spectating, so
+        // without that bit): minutes in bits 8-15, Team Battle in bit 1.
+        assert_eq!(mode(&island(6, true)) & !0x1000_0000, 67_110_410);
         assert_eq!((mode(&island(20, true)) >> 8) & 0xFF, 20);
-        assert_eq!(mode(&island(20, true)) & 2, 2);
     }
 
     #[test]
