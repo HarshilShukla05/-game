@@ -11,18 +11,66 @@
 // With opts.photonPort443, Photon WebSockets on ports 1909x are moved to 443,
 // for networks that only allow 443 out (some cloud sandboxes). Photon serves
 // the same endpoints on 443.
+//  - roomSocket:   { open | close, code } of the Photon game-server socket,
+//                  the connection to the room itself.
+// With opts.netCapture, every WebSocket frame (both ways) is reported as
+//  - net: { frames: [{ ws, dir: 'open' | 'in' | 'out' | 'close', t, url?, b64?, text? }] }
+//    batched every 200 ms; t is epoch ms with sub-ms precision.
 export function pageHooks(opts) {
   if (window.top !== window) return;
   const send = (e) => {
     try { window.__skBridge(e); } catch { /* binding not ready */ }
   };
 
-  if (opts && opts.photonPort443) {
+  {
     const OrigWS = window.WebSocket;
+    const now = () => performance.timeOrigin + performance.now();
+    let queue = [];
+    let flushTimer = null;
+    let sockets = 0;
+    const record = (frame) => {
+      queue.push(frame);
+      if (!flushTimer) {
+        flushTimer = setTimeout(() => {
+          flushTimer = null;
+          const frames = queue;
+          queue = [];
+          send({ type: 'net', frames });
+        }, 200);
+      }
+    };
+    const b64 = (buf) => {
+      const bytes = new Uint8Array(buf);
+      let s = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return btoa(s);
+    };
+    const capture = (id, dir, data, t) => {
+      if (typeof data === 'string') record({ ws: id, dir, t, text: data });
+      else if (data instanceof ArrayBuffer) record({ ws: id, dir, t, b64: b64(data) });
+      else if (ArrayBuffer.isView(data)) record({ ws: id, dir, t, b64: b64(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)) });
+      else if (data instanceof Blob) data.arrayBuffer().then((buf) => record({ ws: id, dir, t, b64: b64(buf) }));
+    };
     const PatchedWS = function (url, protocols) {
-      const m = String(url).match(/^wss:\/\/([^/:]+\.(?:photonengine\.io|exitgames\.com)):(\d+)(.*)$/);
+      const m = opts && opts.photonPort443 && String(url).match(/^wss:\/\/([^/:]+\.(?:photonengine\.io|exitgames\.com)):(\d+)(.*)$/);
       const target = m && m[2] !== '443' ? `wss://${m[1]}:443${m[3]}` : url;
-      return protocols === undefined ? new OrigWS(target) : new OrigWS(target, protocols);
+      const ws = protocols === undefined ? new OrigWS(target) : new OrigWS(target, protocols);
+      if (/\.exitgames\.com(:\d+)?\/game\//.test(String(target))) {
+        ws.addEventListener('open', () => send({ type: 'roomSocket', state: 'open' }));
+        ws.addEventListener('close', (e) => send({ type: 'roomSocket', state: 'close', code: e.code }));
+      }
+      if (opts && opts.netCapture) {
+        const id = ++sockets;
+        record({ ws: id, dir: 'open', t: now(), url: String(target) });
+        const origSend = ws.send;
+        ws.send = function (data) {
+          capture(id, 'out', data, now());
+          return origSend.call(this, data);
+        };
+        ws.addEventListener('message', (e) => capture(id, 'in', e.data, now()));
+        ws.addEventListener('close', (e) => record({ ws: id, dir: 'close', t: now(), code: e.code }));
+      }
+      return ws;
     };
     PatchedWS.prototype = OrigWS.prototype;
     Object.assign(PatchedWS, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });

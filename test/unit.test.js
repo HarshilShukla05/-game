@@ -122,7 +122,7 @@ const WEAPONS = [{ name: 'Rockets' }, { name: 'Invincibility' }, { name: 'Machin
   { name: 'Spikys', aliases: ['spikes'] }, { name: 'Snowball Blaster' }, { name: 'Lob Sentry' }];
 const CHOICES = { timer: TIMER, arenas: ARENAS, weapons: WEAPONS, defaults: { arena: 'Smash Island', weapons: ['Nuke'] } };
 const ask = (text) => parseGameArgs(text, CHOICES);
-const room = (minutes, teams, arena, weapons, explicit = true) => ({ minutes, teams, arena, weapons, explicit });
+const room = (minutes, teams, arena, weapons, explicit = true, fresh = false) => ({ minutes, teams, arena, weapons, explicit, fresh });
 
 test('parseGameArgs: default, lengths, team flag and bad input', () => {
   assert.deepEqual(ask(''), room(10, false, 'Smash Island', ['Nuke'], false));
@@ -135,6 +135,8 @@ test('parseGameArgs: default, lengths, team flag and bad input', () => {
   assert.match(ask('15 team').error, /3, 6, 10, 20 minutes/);
   assert.match(ask('3 20').error, /one round length/);
   assert.match(ask('steam').error, /don't know "steam"/);
+  assert.deepEqual(ask('new'), room(10, false, 'Smash Island', ['Nuke'], true, true));
+  assert.deepEqual(ask('new 20 tunnels'), room(20, false, 'Sky Arena Tunnels', ['Nuke'], true, true));
   assert.deepEqual(ask('help'), { help: true });
   assert.deepEqual(ask('maps'), { help: true });
 });

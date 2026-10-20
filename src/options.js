@@ -42,10 +42,11 @@ function nameIndex(items) {
   };
 }
 
-// "@game", "@game 20 team", "@game tunnels all", "@game nuke mines 6" ->
-// { minutes, teams, arena, weapons, explicit }, { help: true } or { error }.
+// "@game", "@game 20 team", "@game tunnels all", "@game new nuke mines 6" ->
+// { minutes, teams, arena, weapons, explicit, fresh }, { help: true } or { error }.
 // Explicit means the asker named an option; a live room that differs is then
-// replaced, while a plain "@game" just gets the live room's link.
+// replaced, while a plain "@game" just gets the live room's link. "new" asks
+// for a fresh room even if the live one matches or a round is running.
 export function parseGameArgs(args, { timer, arenas, weapons, defaults }) {
   const words = String(args ?? '').toLowerCase().split(/[\s,+&/]+/).filter(Boolean);
   if (words.length === 1 && HELP.test(words[0])) return { help: true };
@@ -55,6 +56,7 @@ export function parseGameArgs(args, { timer, arenas, weapons, defaults }) {
   let teams = null;
   let arena = null;
   let allWeapons = false;
+  let fresh = false;
   const picked = new Set();
 
   for (let i = 0; i < words.length;) {
@@ -70,6 +72,7 @@ export function parseGameArgs(args, { timer, arenas, weapons, defaults }) {
     if (/^teams?$/.test(w)) { teams = true; i++; continue; }
     if (w === 'ffa') { teams = false; i++; continue; }
     if (w === 'all') { allWeapons = true; i++; continue; }
+    if (w === 'new') { fresh = true; i++; continue; }
     let n = Math.min(MAX_NAME_WORDS, words.length - i);
     for (; n >= 1; n--) {
       const key = squash(words.slice(i, i + n).join(''));
@@ -91,7 +94,7 @@ export function parseGameArgs(args, { timer, arenas, weapons, defaults }) {
     return { error: `I don't know "${w}".` };
   }
 
-  const explicit = minutes !== null || teams !== null || arena !== null || allWeapons || picked.size > 0;
+  const explicit = fresh || minutes !== null || teams !== null || arena !== null || allWeapons || picked.size > 0;
   return {
     minutes: minutes ?? timer.defaultMinutes,
     teams: teams ?? false,
@@ -100,6 +103,7 @@ export function parseGameArgs(args, { timer, arenas, weapons, defaults }) {
     weapons: allWeapons ? weapons.map((t) => t.name)
       : picked.size ? weapons.map((t) => t.name).filter((n) => picked.has(n)) : [...defaults.weapons],
     explicit,
+    fresh,
   };
 }
 
@@ -114,7 +118,7 @@ export function weaponsText(weapons, all) {
 
 export const arenaText = (arena) => (arena === 'Random' ? 'a random arena' : arena);
 
-export function helpText({ arenas, weapons, defaults, timer, trigger }) {
+export function helpText({ arenas, weapons, defaults, timer, trigger, startTrigger }) {
   return [
     `🏎️ ${trigger} makes a Smash Karts room. Add any of these, in any order:`,
     `• Round length: ${timer.options.join(', ')} (default ${timer.defaultMinutes})`,
@@ -122,5 +126,7 @@ export function helpText({ arenas, weapons, defaults, timer, trigger }) {
     `• An arena (default ${defaults.arena}): ${arenas.map((t) => t.name).join(', ')}`,
     `• Weapons (default ${defaults.weapons.join(' + ')}), one or more, or "all": ${weapons.map((t) => t.name).join(', ')}`,
     `Short names work: ${trigger} 20 team tunnels nuke mines`,
+    `While a round runs, other settings wait for it to end; ${trigger} new … replaces the room anyway.`,
+    `${startTrigger} starts the round.`,
   ].join('\n');
 }

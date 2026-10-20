@@ -147,7 +147,7 @@ export class WhatsApp extends EventEmitter {
     if (name === null) return;
     if (toSeconds(m.messageTimestamp) < this.startedAt - MAX_COMMAND_AGE_S) return;
 
-    const allowed = this.cfg.groupIds;
+    const allowed = this.cfg.groupIds ?? [];
     if (allowed.length && !allowed.includes(jid)) return;
     if (!allowed.length && !this.knownGroups.has(jid)) {
       this.knownGroups.add(jid);
@@ -170,8 +170,10 @@ export class WhatsApp extends EventEmitter {
     }
   }
 
+  // linkPreview: null stops Baileys fetching a preview of the invite link
+  // (its preview package has open SSRF advisories, so it is not installed).
   reply(jid, text, quoted) {
-    return this.#send(jid, { text }, quoted ? { quoted } : undefined);
+    return this.#send(jid, { text, linkPreview: null }, quoted ? { quoted } : undefined);
   }
 
   sendImage(jid, file, caption, quoted) {

@@ -1,7 +1,7 @@
 {
   "name": "smashkarts-whatsapp-bot",
-  "version": "0.1.0",
-  "description": "WhatsApp bot that hosts a Smash Karts private room (Nukes, Smash Island) and posts the invite link on @game",
+  "version": "1.0.0",
+  "description": "WhatsApp bot that hosts a Smash Karts private room with the arena, weapons, round length and teams asked for, and posts the invite link on @game",
   "type": "module",
   "private": true,
   "engines": {

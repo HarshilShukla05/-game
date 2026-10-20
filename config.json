@@ -1,7 +1,7 @@
 {
   "whatsapp": {
     "authDir": "auth",
-    "groupIds": [],
+    "groupIds": ["120363043845509965@g.us"],
     "pairingNumber": "",
     "trigger": "@game",
     "startTrigger": "@start",
@@ -19,6 +19,7 @@
     "url": "https://smashkarts.io/",
     "photonPort443": false,
     "recordingFile": "recordings/create.json",
+    "captureDir": "",
     "defaults": { "arena": "Smash Island", "weapons": ["Nuke"] },
     "timer": { "options": [3, 6, 10, 20], "startMinutes": 3, "defaultMinutes": 10, "arrow": { "x": 873, "y": 250 } },
     "teamsBox": { "x": 493, "y": 557, "maxDiff": 15 },

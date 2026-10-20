@@ -70,17 +70,20 @@ export function linkMismatches(link, expected = {}) {
 // Owns the real Chromium tab that hosts the room. All public operations are
 // serialized through one queue, so a reset can never interleave with a create.
 //
-// Events: 'menuReady', 'copy' (text), 'input' (calibration), 'lost' (browser
-// or page died; any live room is gone).
+// Events: 'menuReady', 'copy' (text), 'input' (calibration), 'net' (frames,
+// with { capture: true }), 'roomSocket' ('open' | 'close', code: the
+// connection to the room's game server), 'lost' (browser or page died; any
+// live room is gone).
 export class Host extends EventEmitter {
   #queue = Promise.resolve();
   #pending = 0;
 
-  constructor(cfg, log, { record = false } = {}) {
+  constructor(cfg, log, { record = false, capture = false } = {}) {
     super();
     this.cfg = cfg;
     this.log = log;
     this.record = record;
+    this.capture = capture;
     this.context = null;
     this.page = null;
     this.menuLoadedAt = 0;
@@ -118,7 +121,7 @@ export class Host extends EventEmitter {
       ],
     });
     await this.context.exposeBinding('__skBridge', (_source, e) => this.#onPageEvent(e));
-    await this.context.addInitScript(pageHooks, { photonPort443: Boolean(this.cfg.game.photonPort443) });
+    await this.context.addInitScript(pageHooks, { photonPort443: Boolean(this.cfg.game.photonPort443), netCapture: this.capture });
     if (this.record) await this.context.addInitScript(inputRecorder);
 
     const context = this.context;
@@ -163,6 +166,8 @@ export class Host extends EventEmitter {
     else if (e.type === 'copy') this.emit('copy', String(e.text ?? '').trim(), e.via);
     else if (e.type === 'loadingState') this.log.event('loading_state', { value: e.value });
     else if (e.type === 'input') this.emit('input', e);
+    else if (e.type === 'net' && Array.isArray(e.frames)) this.emit('net', e.frames);
+    else if (e.type === 'roomSocket') this.emit('roomSocket', e.state, e.code);
   }
 
   // Resolves true when `event` fires (and passes `filter`), false on timeout.
