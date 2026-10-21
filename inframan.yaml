@@ -39,9 +39,8 @@ services:
       memory_request: 100Mi
       cpu_limit: "1"
       memory_limit: 1536Mi
-    env:
-      # The bot phone's number: links WhatsApp by a code in the logs.
-      WA_PAIRING_NUMBER: "917905878588"
+    # The bot phone's number (WA_PAIRING_NUMBER, to link WhatsApp by a code
+    # in the logs) is personal data: set it in the console, never here.
     connections:
       # The WhatsApp login, under keys prefixed smashbot:wa:. This Redis has
       # no persistence: if it restarts, the bot logs a new pairing code.

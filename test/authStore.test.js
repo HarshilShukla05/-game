@@ -15,7 +15,7 @@ test('the Redis login store survives a reopen and can be cleared', { skip }, asy
     const a = await openAuthStore(cfg, quietLog);
     assert.equal(a.state.creds.registered, false);
     a.state.creds.registered = true;
-    a.state.creds.me = { id: '917905878588:1@s.whatsapp.net' };
+    a.state.creds.me = { id: '15550000000:1@s.whatsapp.net' };
     await a.saveCreds();
     const key = Buffer.from([1, 2, 3, 250]);
     await a.state.keys.set({
@@ -29,7 +29,7 @@ test('the Redis login store survives a reopen and can be cleared', { skip }, asy
 
     const b = await openAuthStore(cfg, quietLog);
     assert.equal(b.state.creds.registered, true);
-    assert.equal(b.state.creds.me.id, '917905878588:1@s.whatsapp.net');
+    assert.equal(b.state.creds.me.id, '15550000000:1@s.whatsapp.net');
     assert.ok(Buffer.isBuffer(b.state.creds.noiseKey.private), 'creds keep their Buffers');
     const pre = await b.state.keys.get('pre-key', ['1', '2']);
     assert.deepEqual([...pre['1'].public], [1, 2, 3, 250]);
