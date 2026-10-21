@@ -74,6 +74,9 @@ pub struct RoomSpec {
     pub name: String,
     pub create_params: Params,
     pub player_properties: Value,
+    /// A game property set to Photon's server clock at creation (games
+    /// stamp rooms this way with `PhotonNetwork.ServerTimestamp`).
+    pub server_time_property: Option<&'static str>,
 }
 
 /// We are in a room on its game server.
@@ -81,6 +84,8 @@ pub struct Room {
     pub name: String,
     pub actor: i32,
     pub properties: Value,
+    /// Everyone's player properties when we entered, by actor number.
+    pub players: Value,
     conn: Connection,
 }
 
@@ -163,6 +168,15 @@ pub async fn create_room(app: &AppSettings, user_id: &str, spec: &RoomSpec) -> R
     let (master, token) = master(app, user_id).await?;
     let mut create = Params::new().with(P_ROOM_NAME, spec.name.as_str());
     create.0.extend(spec.create_params.0.iter().cloned());
+    if let Some(key) = spec.server_time_property {
+        let now = server_time(&master).await?;
+        if let Some((_, Value::Hashtable(props))) =
+            create.0.iter_mut().find(|(k, _)| *k == P_GAME_PROPERTIES)
+        {
+            props.retain(|(k, _)| k.as_str() != Some(key));
+            props.push((key.into(), Value::Int(now)));
+        }
+    }
     log::debug!("photon: creating room {} on the master", spec.name);
     let reply = master
         .request(OP_CREATE_GAME, create.clone(), OP_TIMEOUT)
@@ -182,12 +196,56 @@ pub async fn create_room(app: &AppSettings, user_id: &str, spec: &RoomSpec) -> R
         .request(OP_CREATE_GAME, enter, OP_TIMEOUT)
         .await?
         .ok()?;
-    let actor = reply.get(P_ACTOR_NR).and_then(Value::as_i64).unwrap_or(0) as i32;
-    let properties = reply.get(P_GAME_PROPERTIES).cloned().unwrap_or(Value::Null);
-    Ok(Room {
-        name: spec.name.clone(),
-        actor,
-        properties,
-        conn: game,
-    })
+    Ok(entered(spec.name.clone(), &reply, game))
+}
+
+/// The server's clock, once the connection's first ping has been answered.
+async fn server_time(conn: &Connection) -> Result<i32> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(t) = conn.server_time() {
+            return Ok(t);
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(ClientError::Timeout("the server clock"));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn entered(name: String, reply: &Params, conn: Connection) -> Room {
+    let get = |key| reply.get(key).cloned().unwrap_or(Value::Null);
+    Room {
+        name,
+        actor: reply.get(P_ACTOR_NR).and_then(Value::as_i64).unwrap_or(0) as i32,
+        properties: get(P_GAME_PROPERTIES),
+        players: get(P_PLAYER_PROPERTIES),
+        conn,
+    }
+}
+
+/// Enters an existing room by name. Fails with `Refused` when it is gone,
+/// full or closed; never creates one.
+pub async fn join_room(
+    app: &AppSettings,
+    user_id: &str,
+    name: &str,
+    player_properties: Value,
+) -> Result<Room> {
+    let (master, token) = master(app, user_id).await?;
+    let join = Params::new().with(P_ROOM_NAME, name);
+    let reply = master
+        .request(OP_JOIN_GAME, join.clone(), OP_TIMEOUT)
+        .await?
+        .ok();
+    master.close().await;
+    let reply = reply?;
+    let game_address = string(&reply, P_ADDRESS)?;
+    let token = reply.get(P_TOKEN).cloned().unwrap_or(token);
+    let (game, _) = with_token(app, &game_address, token).await?;
+    let enter = join
+        .with(P_PLAYER_PROPERTIES, player_properties)
+        .with(P_BROADCAST, true);
+    let reply = game.request(OP_JOIN_GAME, enter, OP_TIMEOUT).await?.ok()?;
+    Ok(entered(name.to_owned(), &reply, game))
 }

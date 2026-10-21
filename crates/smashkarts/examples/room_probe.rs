@@ -12,6 +12,9 @@ async fn main() {
     common::init();
     let name = std::env::args().nth(1).expect("room name");
     let mut app = smashkarts::app();
+    if let Ok(r) = std::env::var("REGION") {
+        app.region = r;
+    }
     if let Ok(v) = std::env::var("APP_VERSION") {
         app.app_version = v;
     }

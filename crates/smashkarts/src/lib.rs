@@ -104,13 +104,14 @@ pub async fn create_room(
     let mut last = None;
     for attempt in 0..4u64 {
         let name = room_name(random_u64() ^ attempt);
-        // The game stamps `ahts` with Photon's server clock. Rooms stamped 0
-        // were tested end to end (joined, handed over, a round played), so
-        // creation does not wait to measure the clock.
+        // The game stamps `ahts` with Photon's server clock; the phone app
+        // refuses rooms stamped 0 ("created with an incompatible game
+        // version"), so the stamp is the master's clock at creation.
         let spec = RoomSpec {
             name: name.clone(),
             create_params: room_params(s, 0),
             player_properties: player.clone(),
+            server_time_property: Some("ahts"),
         };
         match realtime::create_room(&app, user_id, &spec).await {
             Ok(room) => {

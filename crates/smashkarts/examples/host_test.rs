@@ -34,6 +34,7 @@ async fn main() {
         t0.elapsed().as_millis(),
         room.actor
     );
+    println!("PROPS {:?}", room.properties);
     let _ = std::io::stdout().flush();
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
