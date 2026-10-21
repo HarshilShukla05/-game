@@ -1309,6 +1309,7 @@ dependencies = [
 name = "smashkarts"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "log",
  "photon",
  "tokio",
